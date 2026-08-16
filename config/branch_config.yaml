@@ -1,0 +1,94 @@
+# branch_config.yaml — the one file in the entire pipeline a human authors.
+#
+# **This is the national form, and it is deliberately not what the runbook
+# originally specified.** The runbook's version mapped *each launch specialty* to
+# its MeSH branches by hand. Launch scope is national with all specialties
+# (docs/prerequisites/05-condition-vocabulary.md), which makes that unwritable —
+# there are 100+ meaningful physician specialties and hand-authoring branch sets
+# for each is exactly the manual work ADR 0001 ruled out.
+#
+# So the mapping inverts. Instead of specialty → branches → conditions, this file
+# shrinks to a short list of included tree branches plus an exclusion list, and
+# `condition_taxonomy` is *derived* from which specialties' matched physicians
+# actually publish on each descriptor (see taxonomy_map.py).
+#
+# A MeSH "tree number" is a dotted path expressing where a concept sits in the
+# hierarchy: C12.294.565.500 reads as "urogenital diseases → male urogenital
+# diseases → prostatic diseases → prostatic hyperplasia". Branch selection is
+# prefix matching on those paths, which is why this file names branches like
+# `C12` rather than listing thousands of descriptors.
+#
+# Every branch here is validated against the year's actual tree at parse time and
+# the run FAILS if one matches nothing. MeSH reorganizes between annual releases,
+# and a branch number that quietly stopped existing produces zero conditions —
+# which looks identical to "this branch has no conditions" and can survive a long
+# way into a release before anyone notices.
+
+# ---------------------------------------------------------------------------
+# Scope: start tight (C + F03 + E04 ≈ 6,200 descriptors).
+#
+# E01 (diagnostic techniques) and E02 (therapeutics) would add ~2,200 more and
+# pick up "dialysis" / "chemotherapy" / "MRI"-type searches, at the cost of a lot
+# of technique descriptors nobody searches by. They can be added later by
+# re-running for those branches only — the cost of being wrong in either
+# direction is a few dollars, not a rebuild.
+# ---------------------------------------------------------------------------
+include:
+  condition_branches:
+    - C      # Diseases — 5,069 descriptors, the core of the vocabulary
+    - F03    # Mental Disorders — 254 descriptors
+  procedure_branches:
+    - E04    # Surgical Procedures — 887 descriptors
+
+# MUST be explicit. Taking all of `F` adds ~1,000 psychological-phenomena
+# descriptors ("Attention", "Memory") that look like conditions to a branch-prefix
+# filter but aren't, and an LLM will produce confident, useless synonyms for them.
+exclude:
+  branches:
+    - F01    # Behavior and Behavior Mechanisms
+    - F02    # Psychological Phenomena
+    - F04    # Behavioral Disciplines and Activities
+    - D      # Chemicals and Drugs — 10,688 descriptors, out of scope
+  # Descriptors that pass the branch filter but are not searchable conditions.
+  # Add to this list as QA review turns them up rather than widening the branch
+  # exclusions, which is a much blunter instrument.
+  descriptors: []
+
+# ---------------------------------------------------------------------------
+# Pruning: "does our ingested literature actually write about this?"
+#
+# The runbook's ≥25 papers was sized for one narrow vertical against a partial
+# corpus. Nationally, with all works ingested, far more descriptors clear it and
+# the filter stops filtering — so the primary rule is *relative* (top-N within
+# each branch) with the absolute count as a floor.
+# ---------------------------------------------------------------------------
+prune:
+  min_papers: 25          # absolute floor; nothing thinner becomes a condition
+  top_n_per_branch: 500   # relative cap, applied within each second-level branch
+  branch_depth: 2         # 'C12.294' — the level the top-N is computed within
+
+# ---------------------------------------------------------------------------
+# LLM enrichment (the only bucket that spends money — single-digit dollars).
+#
+# The runbook specifies claude-sonnet-5; opus-5 is the current general default and
+# costs ~$7 instead of ~$4 for the whole national job via the Batches API. This
+# output becomes user-visible search vocabulary and is expensive to re-audit
+# later, so it is picked on quality, not cost. Run `pex run conditions --compare-models`
+# on a 50-descriptor sample before committing if you want the comparison.
+# ---------------------------------------------------------------------------
+llm:
+  model: claude-opus-5
+  max_tokens: 400
+  use_batches: true       # 50% cheaper, no rate-limit management
+  sample_size: 50         # for --compare-models
+
+# ---------------------------------------------------------------------------
+# Specialty mapping (condition_taxonomy), derived rather than authored.
+# A descriptor maps to a specialty when that specialty's matched physicians
+# publish on it disproportionately often.
+# ---------------------------------------------------------------------------
+specialty_mapping:
+  min_papers_per_specialty: 5    # ignore trace associations
+  min_share: 0.10                # a specialty must account for ≥10% of the papers
+  primary_share: 0.40            # ≥40% makes it the condition's primary specialty
+  max_specialties_per_condition: 6

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Template for a scheduled pex job. Copy per job, substituting:
+    {{JOB}}      a label suffix, e.g. nppes-weekly
+    {{ARGS}}     the pex arguments, one <string> per token
+    {{WEEKDAY}}  0-6 (0 = Sunday), or remove Weekday for a daily job
+    {{HOUR}}     0-23
+    {{REPO}}     absolute path to this repo
+  Then: launchctl load ~/Library/LaunchAgents/com.pex.ingest.{{JOB}}.plist
+
+  Phase 1 limitation, stated honestly: the laptop has to be awake and unlocked
+  for a job to fire, so a missed window just runs late. Phase 2 moves these
+  schedules into GitHub Actions cron against hosted Postgres, which is a
+  configuration change rather than a rewrite because every job already reads
+  DATABASE_URL and PEX_DATA_DIR from the environment.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pex.ingest.{{JOB}}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/uv</string>
+        <string>run</string>
+        <string>pex</string>
+        {{ARGS}}
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>{{REPO}}</string>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>{{WEEKDAY}}</integer>
+        <key>Hour</key>
+        <integer>{{HOUR}}</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Unattended jobs you can't inspect afterwards are worse than no schedule
+         at all, because a silent failure looks exactly like success. `pex status`
+         reads the same run summaries back out of staging.ingest_state. -->
+    <key>StandardOutPath</key>
+    <string>{{REPO}}/../pex-data/_reports/logs/{{JOB}}.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{REPO}}/../pex-data/_reports/logs/{{JOB}}.err.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

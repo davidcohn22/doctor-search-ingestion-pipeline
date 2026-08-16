@@ -1,0 +1,46 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+.pgpass
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.python-version
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data files must NEVER live in this repo — they belong in $PEX_DATA_DIR.
+# These patterns are a backstop against an accidental `git add -A`, not the
+# primary mechanism. See docs/prerequisites/README.md#where-files-live
+data/
+*.csv
+*.zip
+*.gz
+*.parquet
+*.jsonl
+*.xml
+!docs/**/*.xml
+
+# The eval set is the deliberate exception to the *.csv rule: it is QA tooling,
+# not profile data, it is tiny (~80 KB), and it is only useful under version
+# control — a measuring stick that changes silently measures nothing.
+# See eval/README.md
+!eval/*.csv
+
+# Local scratch
+scratch/
+tmp/
+*.log
+
+# macOS
+.DS_Store
