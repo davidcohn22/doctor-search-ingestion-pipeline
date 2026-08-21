@@ -351,6 +351,7 @@ def nppes_facts(record):
         "credential": (basic.get("credential") or "").strip(),
         "status": (basic.get("status") or "").strip(),
         "taxonomy": (primary.get("desc") or "").strip(),
+        "taxonomy_code": (primary.get("code") or "").strip(),
         "city": (location.get("city") or "").strip().title(),
         "state": (location.get("state") or "").strip().upper(),
         "states": states,
@@ -408,8 +409,11 @@ def score_candidate(author, oa_middles, oa_states, cand, keywords, namesakes):
             score -= 0.15
             signals.append("middle-conflict")
 
-    cred = cand["credential"].upper().replace(".", "")
-    if "MD" in cred or "DO" in cred:
+    # Exact-token match, not substring: a naive "MD" in cred also lights up for
+    # "DMD" (dentist) and "PharmD" (pharmacist), both of which contain "MD" as
+    # a substring but are not MD/DO credentials.
+    cred_tokens = re.split(r"[^A-Z]+", cand["credential"].upper().replace(".", ""))
+    if "MD" in cred_tokens or "DO" in cred_tokens:
         score += 0.08
         signals.append("md-do")
 
@@ -581,6 +585,15 @@ def main():
                 # No taxonomy means no specialty label, which makes the row
                 # useless for a specialty-stratified precision measurement.
                 if not cand["taxonomy"]:
+                    continue
+                # This is a *physician* <-> author eval set. NUCC taxonomy codes
+                # for the "Allopathic & Osteopathic Physicians" grouping all
+                # start with "20" (MD and DO alike); dentists, pharmacists,
+                # podiatrists, etc. use other prefixes. Filtering here -- rather
+                # than trusting the credential string -- is what catches a DMD
+                # or PharmD before "MD" in cred can misfire on it (see the
+                # score_candidate docstring).
+                if not cand["taxonomy_code"].startswith("20"):
                     continue
                 score, signals = score_candidate(
                     author, oa_middles, oa_states, cand, keywords, namesakes
