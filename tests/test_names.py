@@ -114,3 +114,11 @@ def test_clean_token_and_initials():
     assert clean_token("O'Brien") == "obrien"
     assert initials_of("Ann Marie") == {"a", "m"}
     assert initials_of("") == set()
+
+
+def test_pool_key_falls_back_to_a_full_name_variant():
+    from pex_ingest.buckets.publications.author_pool import pool_name_key
+
+    assert pool_name_key("W. Scott Young", ["W Scott Young", "Walter S. Young"]) == "young|w"
+    assert pool_name_key("Jane Roe", []) == "roe|j"
+    assert pool_name_key("T. Sumner", ["T. Sumner"]) is None

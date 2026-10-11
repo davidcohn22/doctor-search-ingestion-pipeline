@@ -12,7 +12,7 @@ Runs last, and splits in two: the MeSH parse can run any time, but the pruning
 step and the specialty mapping both need works in the database, so the vocabulary
 *finalizes* after bucket 3.
 
-This is the only bucket that spends money (~$7 nationally) and the only one whose
+This is the only bucket that spends money (≤ ~$8 nationally) and the only one whose
 output a user reads as product copy — hence the QA gate at the end.
 """
 

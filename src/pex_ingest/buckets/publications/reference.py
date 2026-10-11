@@ -129,11 +129,12 @@ ENTITIES = {
 def load(conn: psycopg.Connection, settings: Settings, http, entities=None) -> dict:
     """Load the reference sets. Small enough to cache locally and re-read."""
     stats = {}
-    local_dir = settings.path("openalex", "reference")
-
     for entity in entities or ENTITIES:
         columns, mapper, statement = ENTITIES[entity]
         parts = manifest(http, entity)
+        # One directory per entity: part file names (updated_date=…__part_0000)
+        # repeat across entities and would overwrite each other in a shared one.
+        local_dir = settings.path("openalex", "reference", entity)
 
         def rows():
             for part in parts:
@@ -146,6 +147,9 @@ def load(conn: psycopg.Connection, settings: Settings, http, entities=None) -> d
         stats[entity] = written
         log.info("%s: %s rows", entity, f"{written:,}")
 
+    if "institutions" in (entities or ENTITIES):
+        stats["institution_states_inferred"] = infer_missing_states(conn)
+
     analyze(
         conn,
         "staging.openalex_institution",
@@ -153,6 +157,42 @@ def load(conn: psycopg.Connection, settings: Settings, http, entities=None) -> d
         "staging.openalex_source",
     )
     return stats
+
+
+# ~10% of US institutions have no region in OpenAlex (Johns Hopkins Hospital and
+# Mayo Clinic Arizona among them), which blanks the matcher's geography signal
+# for some of the largest academic centres. Fill the state from the city when
+# NPPES practice addresses put that city name overwhelmingly in one state.
+# Measured 2026-10-10: agrees with OpenAlex on 99.3% of institutions that do
+# have a region; fills ~2,200 of ~3,300 gaps. Ambiguous names (Portland) stay
+# NULL. Inferred rows are recognisable as state_code set with region NULL.
+INFER_STATES = """
+WITH city_state AS (
+    SELECT upper(practice_city) AS city, practice_state AS st, count(*) AS n,
+           sum(count(*)) OVER (PARTITION BY upper(practice_city)) AS total
+    FROM physician
+    WHERE practice_city IS NOT NULL
+    GROUP BY 1, 2
+), dominant AS (
+    SELECT city, st FROM city_state WHERE n >= 0.95 * total AND total >= 5
+)
+UPDATE staging.openalex_institution i
+SET state_code = d.st
+FROM dominant d
+WHERE i.country_code = 'US'
+  AND i.state_code IS NULL
+  AND nullif(i.region, '') IS NULL
+  AND d.city = upper(i.city)
+"""
+
+
+def infer_missing_states(conn: psycopg.Connection) -> int:
+    with conn.cursor() as cur:
+        cur.execute(INFER_STATES)
+        filled = cur.rowcount
+    conn.commit()
+    log.info("institution states inferred from city: %s", f"{filled:,}")
+    return filled
 
 
 def us_institution_states(conn: psycopg.Connection) -> dict[str, str]:
@@ -168,6 +208,20 @@ def us_institution_states(conn: psycopg.Connection) -> dict[str, str]:
             "WHERE state_code IS NOT NULL"
         )
         return dict(cur.fetchall())
+
+
+def us_institution_ids(conn: psycopg.Connection) -> set[str]:
+    """Every US institution, with or without a state — the author-pool filter.
+
+    Being US-affiliated is what puts an author in the pool; the state only feeds
+    the geography score later, so a missing state must not drop the author.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT openalex_institution_id FROM staging.openalex_institution "
+            "WHERE country_code = 'US'"
+        )
+        return {row[0] for row in cur.fetchall()}
 
 
 def topic_subfields(conn: psycopg.Connection) -> dict[str, str]:

@@ -23,8 +23,11 @@ getting this right.
 
 from __future__ import annotations
 
+import itertools
 import logging
-from collections import defaultdict
+import threading
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 
 import psycopg
 
@@ -107,6 +110,10 @@ def position_of(authorship: dict) -> str:
     return raw if raw in ("first", "middle", "last") else "middle"
 
 
+def _iso(value) -> str | None:
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
 def slim_work(record: dict) -> dict | None:
     """Project one snapshot work record into a `work` row."""
     work_id = openalex_id(record.get("id"))
@@ -114,6 +121,9 @@ def slim_work(record: dict) -> dict | None:
         return None
 
     ids = record.get("ids") or {}
+    if not isinstance(ids, dict):
+        # A parquet map column reads back as [(key, value), …].
+        ids = dict(ids)
     pmid = ids.get("pmid")
     if pmid:
         # Arrives as a URL: https://pubmed.ncbi.nlm.nih.gov/12345678
@@ -142,8 +152,52 @@ def slim_work(record: dict) -> dict | None:
         "topic_ids": Jsonb([openalex_id(t.get("id")) for t in (record.get("topics") or [])[:5]]),
         "mesh_terms": Jsonb(mesh_terms),
         "cited_by": record.get("cited_by_count"),
-        "raw": Jsonb({"publication_date": record.get("publication_date")}),
+        # Parquet date → datetime.date, which JSON can't hold.
+        "raw": Jsonb({"publication_date": _iso(record.get("publication_date"))}),
     }
+
+
+def read_and_project(http, part, authors: dict, us_authors: set, keep_edges: bool):
+    """Read one part file → (work rows, authorship rows, edge rows, records read)."""
+    records = 0
+    work_rows: list[dict] = []
+    authorship_rows: list[dict] = []
+    edge_rows: list[tuple] = []
+
+    for record in read_part(http, part, WORK_COLUMNS):
+        records += 1
+        authorships = record.get("authorships") or []
+        work_id = openalex_id(record.get("id"))
+        if not work_id:
+            continue
+
+        relevant = False
+        for authorship in authorships:
+            author_id = openalex_id((authorship.get("author") or {}).get("id"))
+            if not author_id:
+                continue
+            position = position_of(authorship)
+
+            if keep_edges and author_id in us_authors:
+                edge_rows.append((author_id, work_id, position))
+
+            for npi, confidence in authors.get(author_id, ()):
+                relevant = True
+                authorship_rows.append({
+                    "npi": npi,
+                    "work_id": work_id,
+                    "author_id": author_id,
+                    "position": position,
+                    # "A paper is only as certain as the identity match behind
+                    # it" — inherited, never invented here.
+                    "confidence": confidence,
+                })
+
+        if relevant:
+            slim = slim_work(record)
+            if slim:
+                work_rows.append(slim)
+    return work_rows, authorship_rows, edge_rows, records
 
 
 def build(
@@ -152,8 +206,11 @@ def build(
     http,
     keep_edges: bool = True,
     resume: bool = True,
+    http_factory=None,
+    workers: int = 1,
 ) -> dict:
     """Stream the works snapshot once; write product rows and the edge list."""
+    http_factory = http_factory or (lambda: http)
     authors = matched_authors(conn)
     if not authors:
         raise RuntimeError(
@@ -168,71 +225,62 @@ def build(
     if done:
         log.info("resuming: %d of %d work part files already processed", len(done), len(parts))
 
+    if keep_edges:
+        drop_edge_indexes(conn)
+
     stats: defaultdict = defaultdict(int)
+    todo = [(index, part) for index, part in enumerate(parts, start=1) if part.name not in done]
 
-    for index, part in enumerate(parts, start=1):
-        if part.name in done:
-            continue
+    # Reading a part is mostly waiting on S3 range requests, so a few parts are
+    # read concurrently; writes and progress markers stay on this thread, in
+    # manifest order, so resume semantics are unchanged. Only parts in flight
+    # are held in memory, and each holds kept rows, never raw records.
+    local = threading.local()
 
-        work_rows: list[dict] = []
-        authorship_rows: list[dict] = []
-        edge_rows: list[tuple] = []
+    def process(part):
+        if not hasattr(local, "http"):
+            local.http = http_factory()
+        return read_and_project(local.http, part, authors, us_authors, keep_edges)
 
-        for record in read_part(http, part, WORK_COLUMNS):
-            stats["records"] += 1
-            authorships = record.get("authorships") or []
-            work_id = openalex_id(record.get("id"))
-            if not work_id:
-                continue
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        pending: deque = deque()
+        queue = iter(todo)
+        for item in itertools.islice(queue, max(1, workers)):
+            pending.append((item, pool.submit(process, item[1])))
+        while pending:
+            (index, part), future = pending.popleft()
+            work_rows, authorship_rows, edge_rows, records = future.result()
+            nxt = next(queue, None)
+            if nxt is not None:
+                pending.append((nxt, pool.submit(process, nxt[1])))
+            stats["records"] += records
+            stats["works_kept"] += len(work_rows)
 
-            relevant = False
-            for authorship in authorships:
-                author_id = openalex_id((authorship.get("author") or {}).get("id"))
-                if not author_id:
-                    continue
-                position = position_of(authorship)
+            if work_rows:
+                # Works before authorships, always: `authorship` has a foreign key
+                # into `work`, and a composite one into `physician_author`.
+                upsert(conn, UPSERT_WORK, work_rows, commit_each_batch=False)
+                upsert(conn, UPSERT_AUTHORSHIP, authorship_rows, commit_each_batch=False)
+                conn.commit()
+                stats["authorships"] += len(authorship_rows)
+            if edge_rows:
+                # OpenAlex occasionally lists one author twice on a work: keep the first.
+                unique = list({(a, w): (a, w, pos) for a, w, pos in reversed(edge_rows)}.values())
+                stats["edges"] += copy_rows(
+                    conn, "staging.openalex_authorship_edge", EDGE_COLUMNS, unique
+                )
 
-                if keep_edges and author_id in us_authors:
-                    edge_rows.append((author_id, work_id, position))
+            add_marker(conn, JOB, part.name)
+            stats["parts"] += 1
+            if index % 25 == 0:
+                log.info(
+                    "  … %d/%d parts | %s works kept, %s authorships, %s edges",
+                    index, len(parts), f"{stats['works_kept']:,}",
+                    f"{stats['authorships']:,}", f"{stats['edges']:,}",
+                )
 
-                for npi, confidence in authors.get(author_id, ()):
-                    relevant = True
-                    authorship_rows.append({
-                        "npi": npi,
-                        "work_id": work_id,
-                        "author_id": author_id,
-                        "position": position,
-                        # "A paper is only as certain as the identity match behind
-                        # it" — inherited, never invented here.
-                        "confidence": confidence,
-                    })
-
-            if relevant:
-                slim = slim_work(record)
-                if slim:
-                    work_rows.append(slim)
-                    stats["works_kept"] += 1
-
-        if work_rows:
-            # Works before authorships, always: `authorship` has a foreign key
-            # into `work`, and a composite one into `physician_author`.
-            upsert(conn, UPSERT_WORK, work_rows, commit_each_batch=False)
-            upsert(conn, UPSERT_AUTHORSHIP, authorship_rows, commit_each_batch=False)
-            conn.commit()
-            stats["authorships"] += len(authorship_rows)
-        if edge_rows:
-            copy_rows(conn, "staging.openalex_authorship_edge", EDGE_COLUMNS, edge_rows)
-            stats["edges"] += len(edge_rows)
-
-        add_marker(conn, JOB, part.name)
-        stats["parts"] += 1
-        if index % 25 == 0:
-            log.info(
-                "  … %d/%d parts | %s works kept, %s authorships, %s edges",
-                index, len(parts), f"{stats['works_kept']:,}",
-                f"{stats['authorships']:,}", f"{stats['edges']:,}",
-            )
-
+    if keep_edges:
+        stats["edge_duplicates_removed"] = restore_edge_indexes(conn)
     analyze(conn, "work", "authorship")
     log.info(
         "works pass complete: %s records read, %s works kept, %s authorships, %s edges",
@@ -240,6 +288,54 @@ def build(
         f"{stats['authorships']:,}", f"{stats['edges']:,}",
     )
     return dict(stats)
+
+
+# The edge list reaches ~150M rows. Appending that through two B-trees means a
+# random index read per row once they outgrow memory, which made the pass
+# DB-bound at ~7 h. Instead the pass appends to a bare heap and builds both
+# indexes once at the end, sorted. If a pass dies midway the indexes stay
+# dropped until the resumed pass finishes; nothing reads the edges until then.
+EDGE_PKEY = "openalex_authorship_edge_pkey"
+EDGE_WORK_INDEX = "openalex_authorship_edge_work"
+
+
+def drop_edge_indexes(conn: psycopg.Connection) -> None:
+    with conn.cursor() as cur:
+        cur.execute(f"ALTER TABLE staging.openalex_authorship_edge DROP CONSTRAINT IF EXISTS {EDGE_PKEY}")
+        cur.execute(f"DROP INDEX IF EXISTS staging.{EDGE_WORK_INDEX}")
+    conn.commit()
+    log.info("edge-list indexes dropped for the bulk append; rebuilt at the end")
+
+
+def restore_edge_indexes(conn: psycopg.Connection) -> int:
+    """Remove duplicate edges (a part re-read after a crash), then rebuild indexes."""
+    with conn.cursor() as cur:
+        cur.execute("SET maintenance_work_mem = '2GB'")
+        cur.execute("""
+            DELETE FROM staging.openalex_authorship_edge e
+            USING (
+                SELECT ctid FROM (
+                    SELECT ctid, row_number() OVER (
+                        PARTITION BY openalex_author_id, openalex_work_id ORDER BY ctid) AS rn
+                    FROM staging.openalex_authorship_edge
+                ) ranked WHERE rn > 1
+            ) dup
+            WHERE e.ctid = dup.ctid
+        """)
+        removed = cur.rowcount
+        log.info("edge list: %s duplicate rows removed; building indexes", f"{removed:,}")
+        cur.execute(
+            f"ALTER TABLE staging.openalex_authorship_edge "
+            f"ADD CONSTRAINT {EDGE_PKEY} PRIMARY KEY (openalex_author_id, openalex_work_id)"
+        )
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS {EDGE_WORK_INDEX} "
+            f"ON staging.openalex_authorship_edge (openalex_work_id)"
+        )
+        cur.execute("RESET maintenance_work_mem")
+    conn.commit()
+    analyze(conn, "staging.openalex_authorship_edge")
+    return removed
 
 
 def _pool_author_ids(conn: psycopg.Connection) -> set[str]:

@@ -18,6 +18,7 @@ from ...config import Settings
 from ...db import connect
 from ...http import client_for
 from ...runs import RunSummary
+from ...spine import rebuild as rebuild_spine
 from ...state import mark_finished, mark_started
 from . import columns, geocode, sources, stage, taxonomy, transform
 
@@ -26,9 +27,16 @@ log = logging.getLogger("pex.nppes")
 
 def load_taxonomy(settings: Settings) -> None:
     """Refresh the NUCC reference table. Must precede the physician load."""
-    http = client_for(settings, "nppes")
-    url, version = sources.discover_nucc(http)
-    path = http.download(url, settings.path("nucc", f"nucc_taxonomy_{version}.csv"))
+    if settings.nucc_csv:
+        # Supplied by hand via PEX_NUCC_CSV; nothing is fetched from nucc.org.
+        path = settings.nucc_csv
+        if not path.is_file():
+            raise FileNotFoundError(f"PEX_NUCC_CSV points at {path}, which is not a file")
+        log.info("NUCC taxonomy from PEX_NUCC_CSV: %s", path)
+    else:
+        http = client_for(settings, "nppes")
+        url, version = sources.discover_nucc(http)
+        path = http.download(url, settings.path("nucc", f"nucc_taxonomy_{version}.csv"))
     with connect(settings) as conn, RunSummary("nucc_taxonomy", conn) as run:
         run.add("codes", taxonomy.load(conn, path))
 
@@ -93,6 +101,11 @@ def ingest(settings: Settings, weekly: bool = False, skip_geocode: bool = False)
             run.note("sanity_warning", warning)
         for warning in transform.post_load_checks(conn):
             log.warning("CHECK: %s", warning)
+
+        # The matchers in buckets 3 and 4 read the spine through this index;
+        # it is derived from `physician`, so it must follow every spine load.
+        for key, value in rebuild_spine(conn, settings).items():
+            run.add(f"spine_{key}", value)
 
         mark_finished(conn, job)
 

@@ -76,7 +76,8 @@ def _release_from_weekly(filename: str) -> str:
 def discover_nppes(http) -> dict[str, NppesFile]:
     """Read the landing page and return the current monthly/weekly/deactivated files."""
     html = http.get_text(NPPES_INDEX)
-    zips = re.findall(r'href="\.?/?([^"]+\.zip)"', html, flags=re.IGNORECASE)
+    # The page has used both quote styles (single quotes as of 2026-10).
+    zips = re.findall(r"""href=["']\.?/?([^"']+\.zip)["']""", html, flags=re.IGNORECASE)
     if not zips:
         raise RuntimeError(
             f"No .zip links found on {NPPES_INDEX}. The page layout changed, or the "

@@ -29,6 +29,32 @@ def _date(col: str) -> str:
     return _DATE.format(col=col)
 
 
+# A few records spell the state out ("PUERTO RICO"); store and judge those by code.
+US_STATE_NAMES = {
+    "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR", "CALIFORNIA": "CA",
+    "COLORADO": "CO", "CONNECTICUT": "CT", "DELAWARE": "DE", "DISTRICT OF COLUMBIA": "DC",
+    "FLORIDA": "FL", "GEORGIA": "GA", "HAWAII": "HI", "IDAHO": "ID", "ILLINOIS": "IL",
+    "INDIANA": "IN", "IOWA": "IA", "KANSAS": "KS", "KENTUCKY": "KY", "LOUISIANA": "LA",
+    "MAINE": "ME", "MARYLAND": "MD", "MASSACHUSETTS": "MA", "MICHIGAN": "MI",
+    "MINNESOTA": "MN", "MISSISSIPPI": "MS", "MISSOURI": "MO", "MONTANA": "MT",
+    "NEBRASKA": "NE", "NEVADA": "NV", "NEW HAMPSHIRE": "NH", "NEW JERSEY": "NJ",
+    "NEW MEXICO": "NM", "NEW YORK": "NY", "NORTH CAROLINA": "NC", "NORTH DAKOTA": "ND",
+    "OHIO": "OH", "OKLAHOMA": "OK", "OREGON": "OR", "PENNSYLVANIA": "PA",
+    "RHODE ISLAND": "RI", "SOUTH CAROLINA": "SC", "SOUTH DAKOTA": "SD", "TENNESSEE": "TN",
+    "TEXAS": "TX", "UTAH": "UT", "VERMONT": "VT", "VIRGINIA": "VA", "WASHINGTON": "WA",
+    "WEST VIRGINIA": "WV", "WISCONSIN": "WI", "WYOMING": "WY", "PUERTO RICO": "PR",
+    "GUAM": "GU", "VIRGIN ISLANDS": "VI", "U.S. VIRGIN ISLANDS": "VI",
+    "AMERICAN SAMOA": "AS", "NORTHERN MARIANA ISLANDS": "MP",
+}
+
+
+def state_sql(col: str) -> str:
+    """Upper-cased, trimmed state with spelled-out US names mapped to their code."""
+    raw = f"upper(btrim(coalesce({col}, '')))"
+    cases = " ".join(f"WHEN '{name}' THEN '{code}'" for name, code in US_STATE_NAMES.items())
+    return f"(CASE {raw} {cases} ELSE nullif({raw}, '') END)"
+
+
 UPSERT_PHYSICIAN = f"""
 INSERT INTO physician (
     npi, first_name, middle_name, last_name, name_suffix, credential, gender,
@@ -72,7 +98,7 @@ SELECT
     nullif(btrim(coalesce(s.practice_line1, '')), ''),
     nullif(btrim(coalesce(s.practice_line2, '')), ''),
     nullif(btrim(coalesce(s.practice_city, '')), ''),
-    upper(nullif(btrim(coalesce(s.practice_state, '')), '')),
+    {state_sql('s.practice_state')},
     nullif(btrim(coalesce(s.practice_zip, '')), ''),
     jsonb_strip_nulls(jsonb_build_object(
         'line1', nullif(btrim(coalesce(s.mailing_line1, '')), ''),
@@ -154,6 +180,141 @@ ON CONFLICT (npi, taxonomy_code, license_state) DO UPDATE SET
 """
 
 
+def default_primary_sql(slots: int = TAXONOMY_SLOTS) -> str:
+    """Give every physician with no flagged primary taxonomy exactly one.
+
+    NPPES lets a provider leave the primary switch blank in every slot; the first
+    live load had 11,849 such physicians, who would be invisible to any
+    primary-specialty filter. The conventional reading is the first slot, and a
+    physician code beats a non-physician one (e.g. "Student…") when both appear.
+    """
+    rows = ",\n        ".join(
+        f"({n}, s.taxonomy_code_{n}, s.license_state_{n})" for n in range(1, slots + 1)
+    )
+    return f"""
+WITH no_primary AS (
+    SELECT p.npi FROM physician p
+    WHERE NOT EXISTS (SELECT 1 FROM physician_taxonomy t WHERE t.npi = p.npi AND t.is_primary)
+),
+first_slot AS (
+    SELECT DISTINCT ON (s.npi)
+        s.npi, t.code, coalesce(nullif(btrim(t.license_state), ''), '') AS license_state
+    FROM staging.nppes_physician s
+    JOIN no_primary USING (npi)
+    CROSS JOIN LATERAL (VALUES
+        {rows}
+    ) AS t(slot, code, license_state)
+    JOIN taxonomy tx ON tx.code = t.code
+    ORDER BY s.npi, tx.is_physician DESC, t.slot
+)
+UPDATE physician_taxonomy pt SET is_primary = true
+FROM first_slot f
+WHERE pt.npi = f.npi AND pt.taxonomy_code = f.code AND pt.license_state = f.license_state
+"""
+
+
+# ---------------------------------------------------------------------------
+# Exclusions beyond the stage filter (decided 2026-10-10, first live run).
+#
+# The stage filter keeps anyone with a `20…` code in ANY of 15 slots, which lets
+# in ~28K nurse practitioners, PAs and CRNAs who list e.g. Family Medicine as a
+# secondary code. A record is dropped when it carries no MD/DO-type credential
+# AND either its credential is a known non-physician one or its primary code is
+# a non-physician code. MDs/DOs with an unusual primary code are kept.
+#
+# Practice addresses outside the 50 states, DC and the inhabited territories
+# (Canada, APO/FPO military mail, abroad) are dropped: a US search can't place
+# them and the geocoder can't either.
+# ---------------------------------------------------------------------------
+
+PHYSICIAN_CREDENTIALS = ("MD", "DO", "MBBS", "MBCHB", "MBBCH", "MB", "MDCM")
+NON_PHYSICIAN_CREDENTIALS = (
+    "NP", "FNP", "FNPC", "FNPBC", "ANP", "AGNP", "AGPCNP", "AGACNP", "ACNP", "PNP",
+    "WHNP", "NNP", "PMHNP", "APRN", "APN", "CNP", "ARNP", "CRNP", "PA", "PAC",
+    "CRNA", "RN", "BSN", "MSN", "DNP", "CNM", "LPN", "PHARMD", "RPH", "DDS", "DMD",
+    "DPM", "OD", "DC", "PSYD", "LCSW", "PT", "DPT", "OT", "SLP", "AUD",
+    "CPNP", "CFNP", "NURSE", "PTA", "ATC",
+    # Seen in the spine after the first load: researchers, other doctorates,
+    # therapists and techs that list a physician taxonomy.
+    "PHD", "DVM", "VMD", "ND", "NMD", "LMT", "MS", "MA", "OTR", "OTRL", "COTA",
+    "COTAL", "CSFA", "RDMS", "LPTA", "MPT", "RPT", "LAC", "DACM", "RD", "MSW",
+    "LPC", "LMFT", "CNA", "EMT", "STUDENT",
+)
+# NUCC files medical physicists under the physician "Radiology" classification;
+# without an MD/DO they are not physicians.
+NON_PHYSICIAN_TAXONOMIES = ("2085R0205X",)
+US_STATES = (
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID",
+    "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO",
+    "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA",
+    "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+    "PR", "GU", "VI", "AS", "MP",
+)
+
+# Credentials are free text ("M.D.", "PA-C", "MD, PhD"); compare whole tokens so
+# "DMD" never reads as "MD". Periods are dropped first so "P.A." and "PH.D." read
+# as PA and PHD; "M. D." still tokenizes to "M D", hence the extra cases. The MD
+# check also reads the undotted form, so "MD.PHD" (→ "MDPHD") stays a physician.
+_CRED_TOKENS = (
+    "(' ' || regexp_replace(regexp_replace(upper(coalesce(s.credential, '')), '[.]', '', 'g'),"
+    " '[^A-Z]+', ' ', 'g') || ' ')"
+)
+_CRED_TOKENS_RAW = (
+    "(' ' || regexp_replace(upper(coalesce(s.credential, '')), '[^A-Z]+', ' ', 'g') || ' ')"
+)
+
+
+def _token_regex(tokens) -> str:
+    return "' (" + "|".join(tokens) + ") '"
+
+
+def exclusion_sql(slots: int = TAXONOMY_SLOTS) -> str:
+    """One row per staged NPI to drop, with the reason."""
+    primary_nonphys = " OR ".join(
+        f"(upper(btrim(coalesce(s.taxonomy_primary_{n}, ''))) = 'Y' "
+        f"AND (coalesce(s.taxonomy_code_{n}, '') NOT LIKE '20%' "
+        f"OR s.taxonomy_code_{n} IN ({', '.join(repr(c) for c in NON_PHYSICIAN_TAXONOMIES)})))"
+        for n in range(1, slots + 1)
+    )
+    has_md = (
+        f"({_CRED_TOKENS} ~ {_token_regex(PHYSICIAN_CREDENTIALS)} "
+        f"OR {_CRED_TOKENS_RAW} ~ {_token_regex(PHYSICIAN_CREDENTIALS)} "
+        f"OR {_CRED_TOKENS} ~ ' M D ' OR {_CRED_TOKENS} ~ ' D O ')"
+    )
+    us = ", ".join(f"'{st}'" for st in US_STATES)
+    state = f"coalesce({state_sql('s.practice_state')}, '')"
+    return f"""
+SELECT s.npi,
+       CASE WHEN {state} NOT IN ({us})
+            THEN 'outside_us' ELSE 'non_physician' END AS reason
+FROM staging.nppes_physician s
+WHERE {state} NOT IN ({us})
+   OR (NOT {has_md}
+       AND ({_CRED_TOKENS} ~ {_token_regex(NON_PHYSICIAN_CREDENTIALS)} OR {primary_nonphys}))
+"""
+
+
+def apply_exclusions(conn: psycopg.Connection, run_summary=None) -> dict[str, int]:
+    """Drop excluded NPIs from staging and from anything already loaded."""
+    with conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS pg_temp.nppes_excluded")
+        cur.execute(f"CREATE TEMP TABLE nppes_excluded AS {exclusion_sql()}")
+        cur.execute("SELECT reason, count(*) FROM nppes_excluded GROUP BY reason")
+        counts = dict(cur.fetchall())
+        cur.execute(
+            "DELETE FROM staging.nppes_physician s USING nppes_excluded e WHERE s.npi = e.npi"
+        )
+        # Cascades to physician_taxonomy and every other NPI-keyed table.
+        cur.execute("DELETE FROM physician p USING nppes_excluded e WHERE p.npi = e.npi")
+        counts["already_loaded_removed"] = cur.rowcount
+    conn.commit()
+    for reason in ("non_physician", "outside_us"):
+        log.info("excluded %s staged rows: %s", f"{counts.get(reason, 0):,}", reason)
+        if run_summary is not None and counts.get(reason):
+            run_summary.reject(reason, counts[reason])
+    return counts
+
+
 COUNT_UNKNOWN_TAXONOMIES = f"""
 SELECT count(*)
 FROM staging.nppes_physician s
@@ -167,6 +328,10 @@ WHERE nullif(btrim(t.code), '') IS NOT NULL
 def run(conn: psycopg.Connection, run_summary=None) -> dict:
     """Apply both upserts and return counts for the run summary."""
     stats: dict[str, int] = {}
+
+    excluded = apply_exclusions(conn, run_summary)
+    stats["excluded_non_physician"] = excluded.get("non_physician", 0)
+    stats["excluded_outside_us"] = excluded.get("outside_us", 0)
 
     with conn.cursor() as cur:
         log.info("upserting physician rows")
@@ -188,6 +353,8 @@ def run(conn: psycopg.Connection, run_summary=None) -> dict:
         log.info("upserting physician_taxonomy rows")
         cur.execute(upsert_taxonomies_sql())
         stats["taxonomy_upserted"] = cur.rowcount
+        cur.execute(default_primary_sql())
+        stats["primary_defaulted_to_first_slot"] = cur.rowcount
         conn.commit()
 
         cur.execute("SELECT count(*) FILTER (WHERE nppes_status = 'active'), count(*) FROM physician")

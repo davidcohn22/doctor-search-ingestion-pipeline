@@ -57,6 +57,10 @@ class Settings:
     openalex_api_key: str = ""
     anthropic_api_key: str = ""
 
+    # A NUCC taxonomy CSV supplied by hand. When set, bucket 1 loads this file
+    # instead of scraping nucc.org (which served spam in 2026-10).
+    nucc_csv: Path | None = None
+
     # Tuning knobs with sane defaults; override from the environment when a
     # machine or a run needs something different.
     http_cache: bool = True
@@ -189,6 +193,7 @@ def load_settings(require_db: bool = True) -> Settings:
         # Accept both spellings: the docs repo's .env uses OPEN_ALEX_API_KEY.
         openalex_api_key=_env("OPENALEX_API_KEY") or _env("OPEN_ALEX_API_KEY"),
         anthropic_api_key=_env("ANTHROPIC_API_KEY"),
+        nucc_csv=Path(_env("PEX_NUCC_CSV")).expanduser() if _env("PEX_NUCC_CSV") else None,
         http_cache=_bool_env("PEX_HTTP_CACHE", True),
         batch_size=int(_env("PEX_BATCH_SIZE", "5000")),
         log_level=_env("PEX_LOG_LEVEL", "INFO").upper(),

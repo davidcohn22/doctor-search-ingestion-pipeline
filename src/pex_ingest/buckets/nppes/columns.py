@@ -64,6 +64,7 @@ ALIASES = {
     "provider_name_prefix_text": "name_prefix",
     "provider_credential_text": "credential",
     "provider_gender_code": "gender",
+    "provider_sex_code": "gender",          # CMS's name for it since 2026
     "provider_enumeration_date": "enumeration_date",
     "last_update_date": "last_update_date",
     "npi_deactivation_date": "deactivation_date",

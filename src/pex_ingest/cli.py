@@ -203,9 +203,9 @@ def cmd_run(args) -> int:
         if args.pool:
             pub_job.build_pool(settings, resume=not args.no_resume)
         if args.match:
-            pub_job.match(settings, use_orcid=not args.no_orcid)
+            pub_job.match(settings, use_orcid=not args.no_orcid, workers=args.workers)
         if args.works:
-            pub_job.pull_works(settings, resume=not args.no_resume)
+            pub_job.pull_works(settings, resume=not args.no_resume, workers=args.workers)
         if args.backfill_edges:
             pub_job.backfill_edges(settings)
         if args.mesh:
@@ -296,6 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     pubs.add_argument("--search-fallback", action="store_true",
                       help="per-physician author search for the unmatched")
     pubs.add_argument("--no-orcid", action="store_true", help="skip ORCID confirmation calls")
+    pubs.add_argument("--workers", type=int, default=1, help="parallel matcher processes / concurrent works part reads")
     pubs.add_argument("--no-resume", action="store_true", help="ignore saved part-file progress")
     pubs.add_argument("--limit", type=int, help="cap the work item count (for testing)")
 

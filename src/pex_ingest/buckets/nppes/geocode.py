@@ -163,6 +163,7 @@ def run(conn: psycopg.Connection, settings: Settings, http, run_summary=None,
     if max_batches:
         batches = batches[:max_batches]
 
+    sent = failed = 0
     for batch_no, batch in enumerate(batches, start=1):
         log.info("geocode batch %d/%d (%s addresses)", batch_no, len(batches), f"{len(batch):,}")
         try:
@@ -171,9 +172,11 @@ def run(conn: psycopg.Connection, settings: Settings, http, run_summary=None,
             # A failed batch is not a failed load: its addresses simply stay
             # uncached and are retried on the next run.
             log.error("geocode batch %d failed: %s", batch_no, exc)
+            failed += 1
             if run_summary is not None:
                 run_summary.reject("geocode_batch_failed", len(batch))
             continue
+        sent += len(batch)
 
         for key, street, city, state, zip5 in batch:
             if key in matched:
@@ -188,8 +191,21 @@ def run(conn: psycopg.Connection, settings: Settings, http, run_summary=None,
 
     # ZIP-centroid fallback for everything the geocoder could not match.
     centroids = _zip_centroids(conn, {r[4] for r in skipped if r[4]})
-    for key, _street, _city, _state, zip5 in skipped:
+    # Last resort for ZIPs with no ZCTA centroid: the centre of that city, taken
+    # from physicians already located there. Large academic centres use
+    # institution-only ZIPs (Dartmouth-Hitchcock 03756, UNMC 68198, Duke 27710)
+    # that the Census ZCTA file lacks, and without this their physicians, often
+    # the most-published, have no coordinates at all.
+    city_points = _city_centroids(
+        conn, {(city, state) for _k, _s, city, state, z in skipped if z not in centroids}
+    )
+    stats["city_centroid"] = 0
+    for key, _street, city, state, zip5 in skipped:
         point = centroids.get(zip5)
+        note = None
+        if point is None:
+            point = city_points.get(((city or "").upper(), (state or "").upper()))
+            note = f"city centroid: {city}, {state}"
         if point is None:
             stats["unresolved"] += 1
             if run_summary is not None:
@@ -197,22 +213,28 @@ def run(conn: psycopg.Connection, settings: Settings, http, run_summary=None,
             continue
         cached.append({
             "address_key": key, "lat": point[0], "lng": point[1],
-            "precision": "zip_centroid", "matched_address": None,
+            # The schema allows only rooftop | zip_centroid; both fallbacks are
+            # "approximate" to the UI. matched_address records which one it was.
+            "precision": "zip_centroid", "matched_address": note,
         })
-        stats["zip_centroid"] += 1
+        stats["city_centroid" if note else "zip_centroid"] += 1
 
     written = upsert(conn, UPSERT_CACHE, cached)
     log.info("cached %s geocodes (%s rooftop, %s zip-centroid, %s unresolved)",
              f"{written:,}", f"{stats['rooftop']:,}", f"{stats['zip_centroid']:,}",
              f"{stats['unresolved']:,}")
 
-    if stats["rooftop"] and stats["rooftop"] / max(len(sendable), 1) < 0.90:
+    if sent and stats["rooftop"] / sent < 0.90:
         log.warning(
             "rooftop match rate %.1f%% — the prerequisites doc expects >90%%",
-            100 * stats["rooftop"] / max(len(sendable), 1),
+            100 * stats["rooftop"] / sent,
         )
 
     _apply(conn, stats)
+    if batches and failed == len(batches):
+        # Every batch failing is a broken job, not a partial one — it must not
+        # log as "finished".
+        raise RuntimeError(f"all {failed} geocode batches failed; see the log above")
     return stats
 
 
@@ -227,6 +249,27 @@ def _apply(conn: psycopg.Connection, stats: dict) -> None:
 # ---------------------------------------------------------------------------
 # ZIP centroids
 # ---------------------------------------------------------------------------
+
+def _city_centroids(conn: psycopg.Connection, cities: set[tuple]) -> dict[tuple, tuple]:
+    """{(CITY, ST): (lat, lng)} averaged over rooftop-located physicians there."""
+    pairs = [((c or "").upper(), (s or "").upper()) for c, s in cities if c and s]
+    if not pairs:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT upper(practice_city), practice_state, avg(practice_lat), avg(practice_lng)
+            FROM physician
+            WHERE practice_geo_precision = 'rooftop'
+              AND (upper(practice_city), practice_state) IN
+                  (SELECT * FROM unnest(%s::text[], %s::text[]))
+            GROUP BY 1, 2
+            HAVING count(*) >= 5
+            """,
+            ([c for c, _ in pairs], [s for _, s in pairs]),
+        )
+        return {(row[0], row[1]): (row[2], row[3]) for row in cur.fetchall()}
+
 
 def _zip_centroids(conn: psycopg.Connection, zips: set[str]) -> dict[str, tuple]:
     if not zips:
@@ -274,7 +317,11 @@ def load_zip_centroids(conn: psycopg.Connection, settings: Settings, http) -> in
     with zipfile.ZipFile(path) as archive:
         name = next(n for n in archive.namelist() if n.lower().endswith(".txt"))
         with archive.open(name) as fh:
-            reader = csv.DictReader(io.TextIOWrapper(fh, encoding="latin-1"), delimiter="\t")
+            text = io.TextIOWrapper(fh, encoding="latin-1")
+            # Tab-separated through 2024; the 2025 file switched to pipes.
+            delimiter = "|" if "|" in text.readline() else "\t"
+            text.seek(0)
+            reader = csv.DictReader(text, delimiter=delimiter)
             for raw in reader:
                 clean = { (k or "").strip().upper(): (v or "").strip() for k, v in raw.items() }
                 zip5, lat, lng = clean.get("GEOID"), clean.get("INTPTLAT"), clean.get("INTPTLONG")

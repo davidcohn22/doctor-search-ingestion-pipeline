@@ -103,11 +103,14 @@ class HttpClient:
         **kwargs: Any,
     ) -> requests.Response:
         last_error: Exception | None = None
+        # A caller may need a longer timeout than the client default (the
+        # Census batch geocoder takes minutes per request).
+        timeout = kwargs.pop("timeout", self.timeout)
         for attempt in range(self.max_retries):
             self._wait()
             try:
                 resp = self.session.request(
-                    method, url, params=params, timeout=self.timeout, stream=stream, **kwargs
+                    method, url, params=params, timeout=timeout, stream=stream, **kwargs
                 )
                 self._last_call = time.monotonic()
                 self.calls += 1
@@ -215,7 +218,10 @@ class HttpClient:
         started = time.monotonic()
         written = 0
         with self.get(url, stream=True) as resp, open(part, "wb") as fh:
-            for chunk in resp.iter_content(chunk_size=chunk_size):
+            # Save the bytes exactly as served. iter_content() would undo a
+            # Content-Encoding: gzip, and NLM serves desc*.gz with exactly that
+            # header, turning a 17 MB .gz into 313 MB of XML that fails the size check.
+            for chunk in resp.raw.stream(chunk_size, decode_content=False):
                 fh.write(chunk)
                 written += len(chunk)
                 if written % (200 * chunk_size) == 0:

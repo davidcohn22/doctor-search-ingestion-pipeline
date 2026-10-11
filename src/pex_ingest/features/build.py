@@ -44,9 +44,10 @@ ACTIVE_TRIAL_STATUSES = (
     "NOT_YET_RECRUITING",
 )
 
+# One statement per string: a parameterized execute is a prepared statement, and
+# Postgres refuses several commands in one. The TRUNCATE runs separately, in the
+# same transaction, so readers never see the table empty.
 REBUILD_CONDITION_FEATURES = """
-TRUNCATE physician_condition_features;
-
 INSERT INTO physician_condition_features (
     npi, condition_id, relevant_pub_count, first_last_pub_count, recent_pub_count,
     earliest_pub_year, latest_pub_year, trial_count, active_trial_count, computed_at
@@ -121,8 +122,6 @@ FULL OUTER JOIN trials tr ON tr.npi = p.npi AND tr.condition_id = p.condition_id
 """
 
 REBUILD_PHYSICIAN_FEATURES = """
-TRUNCATE physician_features;
-
 INSERT INTO physician_features (
     npi, total_pub_count, total_first_last_pub_count, total_trial_count,
     grad_year, has_education, computed_at
@@ -186,6 +185,7 @@ def run(conn: psycopg.Connection) -> dict:
 
     with conn.cursor() as cur:
         log.info("rebuilding physician_condition_features")
+        cur.execute("TRUNCATE physician_condition_features")
         cur.execute(
             REBUILD_CONDITION_FEATURES,
             {"recency": RECENCY_YEARS, "active": list(ACTIVE_TRIAL_STATUSES)},
@@ -193,6 +193,7 @@ def run(conn: psycopg.Connection) -> dict:
         conn.commit()
 
         log.info("rebuilding physician_features")
+        cur.execute("TRUNCATE physician_features")
         cur.execute(REBUILD_PHYSICIAN_FEATURES)
         conn.commit()
 

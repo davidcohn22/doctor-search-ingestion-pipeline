@@ -124,7 +124,7 @@ def stage(settings: Settings, csv_path) -> tuple[int, int]:
             CREATE OR REPLACE TABLE pg.{STAGING_TABLE} AS
             SELECT DISTINCT
                 NPI                       AS npi,
-                btrim(Med_sch)            AS med_school,
+                trim(Med_sch)             AS med_school,
                 CASE
                     WHEN TRY_CAST(Grd_yr AS SMALLINT) BETWEEN {MIN_GRAD_YEAR}
                          AND {date.today().year}
@@ -132,7 +132,7 @@ def stage(settings: Settings, csv_path) -> tuple[int, int]:
                 END                       AS grad_year,
                 Grd_yr                    AS grad_year_raw
             FROM read_csv('{csv_path}', header=true, all_varchar=true, sample_size=-1)
-            WHERE Med_sch IS NOT NULL AND btrim(Med_sch) <> ''
+            WHERE Med_sch IS NOT NULL AND trim(Med_sch) <> ''
               AND regexp_matches(NPI, '^[0-9]{{10}}$')
             """
         )

@@ -40,14 +40,14 @@ SPECIALTIES: list[tuple[str, str, list[str]]] = [
     ("2733", "Otolaryngology", ["otolaryngology"]),
     ("2723", "Allergy & Immunology", ["allergy", "immunology"]),
     ("2711", "Emergency Medicine", ["emergency medicine"]),
-    ("2714", "Family Practice", ["family medicine"]),
-    ("2724", "Internal Medicine", ["internal medicine"]),
+    ("2714", "Family Practice", ["family medicine", "general practice"]),
+    ("2724", "Internal Medicine", ["internal medicine", "hospitalist"]),
     ("2717", "Geriatrics", ["geriatric"]),
     ("2706", "Critical Care", ["critical care", "intensive care"]),
     ("2747", "Transplantation", ["transplant"]),
-    ("2739", "Pathology", ["pathology"]),
+    ("2734", "Pathology", ["pathology"]),
     ("2716", "Genetics", ["genetics", "genomics"]),
-    ("2718", "Physical Medicine & Rehab", ["physical medicine", "rehabilitation"]),
+    ("2742", "Physical Medicine & Rehab", ["physical medicine", "rehabilitation"]),
     ("2713", "Preventive Medicine", ["preventive medicine", "public health"]),
 ]
 
@@ -57,7 +57,29 @@ SPECIALTIES: list[tuple[str, str, list[str]]] = [
 # Nephrology" in Nephrology.
 GENERIC_BUCKETS = {"Surgery", "Internal Medicine", "Family Practice", "Pediatrics"}
 
+# Further OpenAlex subfields that count as research in a specialty. The table
+# above holds each label's namesake subfield, but OpenAlex files only 2 topics
+# under Family Practice and 1 under Internal Medicine, so generalists publish
+# almost entirely elsewhere (public health, epidemiology), and a few specialties
+# have a sibling subfield (hepatology, reproductive medicine). Without these the
+# specialty signal could never fire for ~490K generalists, and their best
+# possible score stayed below the accept threshold.
+EXTRA_SUBFIELDS: dict[str, list[str]] = {
+    "Family Practice": ["2724", "2739", "2713", "2717"],
+    "Internal Medicine": ["2714", "2739", "2713", "2717"],
+    "Preventive Medicine": ["2739"],
+    "Gastroenterology": ["2721"],
+    "Obstetrics & Gynecology": ["2743"],
+}
+
 SUBFIELD_TO_LABEL = {sid: label for sid, label, _ in SPECIALTIES}
+
+SUBFIELD_TO_LABELS: dict[str, set[str]] = {}
+for _sid, _label, _ in SPECIALTIES:
+    SUBFIELD_TO_LABELS.setdefault(_sid, set()).add(_label)
+for _label, _sids in EXTRA_SUBFIELDS.items():
+    for _sid in _sids:
+        SUBFIELD_TO_LABELS.setdefault(_sid, set()).add(_label)
 
 
 def label_for_taxonomy(taxonomy_text: str) -> str:
@@ -84,25 +106,33 @@ def label_for_subfield(subfield_id: str) -> str | None:
     return SUBFIELD_TO_LABEL.get(str(subfield_id).rsplit("/", 1)[-1])
 
 
+def labels_for_subfield(subfield_id: str) -> set[str]:
+    """Every specialty label an OpenAlex subfield counts toward (empty if none)."""
+    return set(SUBFIELD_TO_LABELS.get(str(subfield_id).rsplit("/", 1)[-1], ()))
+
+
+ADJACENT_CREDIT = 0.5
+
+
 def specialty_fit(author_subfield_ids, physician_labels) -> float:
     """0–1: how well an author's research subfields match a doctor's specialty.
 
-    Returns 0.0 when the author has no recognized medical subfield at all, which
-    is the common case for the many non-clinical authors in the pool and is a
-    genuinely useful negative signal. A partial score for a *related* specialty
-    is deliberately not modelled here — the scorer treats specialty as one of
-    several independent signals, so a near-miss shows up as this signal simply
-    not firing rather than as a fudged fraction.
+    1.0 when the author publishes in the specialty's own subfield (Urology →
+    Urology). ADJACENT_CREDIT when the overlap is only through EXTRA_SUBFIELDS:
+    public health or epidemiology topics are common to almost every medical
+    author, so they corroborate a generalist far more weakly than a namesake
+    subfield does. In a 30-accept review, full credit for them let three
+    wrong-person links through (different first name, foreign researcher).
+    0.0 when the author has no recognized medical subfield at all, the common
+    case for the many non-clinical authors in the pool and a useful negative.
     """
+    physician_labels = set(physician_labels or [])
     if not physician_labels:
         return 0.0
-    author_labels = {label_for_subfield(s) for s in author_subfield_ids or []}
-    author_labels.discard(None)
-    if not author_labels:
-        return 0.0
-    overlap = author_labels & set(physician_labels)
-    if not overlap:
-        return 0.0
-    # Full credit for any exact specialty agreement; a doctor publishing across
-    # several of their own subfields is normal and shouldn't be penalized.
-    return 1.0
+    subfields = list(author_subfield_ids or [])
+    if {label_for_subfield(s) for s in subfields} & physician_labels:
+        return 1.0
+    adjacent = set()
+    for subfield_id in subfields:
+        adjacent |= labels_for_subfield(subfield_id)
+    return ADJACENT_CREDIT if adjacent & physician_labels else 0.0

@@ -7,6 +7,7 @@ that fires on garbage is worse than one that stays silent.
 
 from pex_ingest.specialties import (
     label_for_subfield,
+    labels_for_subfield,
     label_for_taxonomy,
     labels_for_taxonomies,
     specialty_fit,
@@ -70,3 +71,21 @@ def test_unrecognized_geography_returns_none_rather_than_itself():
     assert to_code("XX") is None
     assert to_code("") is None
     assert to_code(None) is None
+
+
+def test_subfield_ids_match_openalex_names():
+    """Pathology is 2734 and Rehabilitation 2742 in OpenAlex; 2739/2718 are
+    Public Health and Health Informatics, which once credited the wrong doctors."""
+    assert labels_for_subfield("2734") == {"Pathology"}
+    assert labels_for_subfield("2742") == {"Physical Medicine & Rehab"}
+    assert "Pathology" not in labels_for_subfield("2739")
+    assert labels_for_subfield("2718") == set()
+
+
+def test_generalists_get_credit_for_where_they_actually_publish():
+    """OpenAlex files almost nothing under Family Practice / Internal Medicine."""
+    assert specialty_fit(["2739"], {"Family Practice"}) == 0.5
+    assert specialty_fit(["2713"], {"Internal Medicine"}) == 0.5
+    assert specialty_fit(["2724", "2739"], {"Internal Medicine"}) == 1.0
+    assert specialty_fit(["2739"], {"Cardiology"}) == 0.0
+    assert labels_for_taxonomies(["Hospitalist"]) == {"Internal Medicine"}

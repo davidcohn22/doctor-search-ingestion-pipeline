@@ -82,10 +82,16 @@ def test_descriptor_ui_is_the_batch_join_key():
     """Never positional: pairing #400's synonyms onto #12 corrupts silently."""
     requests = build_requests(
         [{"mesh_id": "D011470", "name": "Prostatic Hyperplasia", "kind": "condition"}],
-        BranchConfig([], [], [], llm={"model": "claude-opus-5", "max_tokens": 400}),
+        BranchConfig(
+            [], [], [],
+            llm={"model": "claude-sonnet-5-5", "max_tokens": 400,
+                 "thinking": "between_tools", "effort": "high"},
+        ),
     )
     assert requests[0]["custom_id"] == "D011470"
-    assert requests[0]["params"]["model"] == "claude-opus-5"
+    assert requests[0]["params"]["model"] == "claude-sonnet-5-5"
+    assert requests[0]["params"]["thinking"] == {"type": "between_tools"}
+    assert requests[0]["params"]["output_config"] == {"effort": "high"}
     assert "Prostatic Hyperplasia" in requests[0]["params"]["messages"][0]["content"]
 
 

@@ -101,16 +101,40 @@ def decide(score: float, margin: float = 1.0) -> str | None:
 
 
 def name_similarity(a: str, b: str) -> float:
-    """Token-order-insensitive string similarity in 0–1.
+    """First + last name similarity in 0–1, ignoring case, punctuation and middles.
+
+    Compares parsed parts rather than raw strings. The raw-string version scored
+    'Gary H. Lyman' against NPPES 'gary herbert lyman' at 0.60 and even
+    'Kari C. Nadeau' against 'kari c nadeau' below 1.0 (case and periods), which
+    kept nearly every true pair under the accept line (first live run,
+    2026-10-10). Middle names are scored separately as agree/conflict evidence.
 
     Imported lazily so that this module's thresholds and aggregation stay
     importable (and unit-testable) without the native rapidfuzz wheel installed.
     """
     from rapidfuzz import fuzz
 
+    from .names import clean_token, parse_name
+
     if not a or not b:
         return 0.0
-    return fuzz.token_sort_ratio(a, b) / 100.0
+    first_a, _middles_a, last_a = parse_name(a)
+    first_b, _middles_b, last_b = parse_name(b)
+    if not (first_a and last_a and first_b and last_b):
+        # Unparseable (single token, initial-only): fall back to a normalized
+        # whole-string comparison.
+        norm_a = " ".join(clean_token(t) for t in a.split())
+        norm_b = " ".join(clean_token(t) for t in b.split())
+        return fuzz.token_sort_ratio(norm_a, norm_b) / 100.0
+
+    last = 1.0 if last_a == last_b else fuzz.ratio(last_a, last_b) / 100.0
+    if first_a == first_b:
+        first = 1.0
+    elif first_a.startswith(first_b) or first_b.startswith(first_a):
+        first = 0.9    # Jon / Jonathan, Chris / Christopher
+    else:
+        first = fuzz.ratio(first_a, first_b) / 100.0
+    return round(0.6 * last + 0.4 * first, 3)
 
 
 def best_name_similarity(candidate_names, target_name: str) -> float:

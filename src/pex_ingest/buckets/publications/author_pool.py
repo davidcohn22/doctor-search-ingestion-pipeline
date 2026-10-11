@@ -98,8 +98,26 @@ def slim_author(record: dict, us_institutions: set[str]) -> tuple | None:
         json.dumps(affiliations[:20]),
         json.dumps([t for t in topics if t]),
         int(record.get("works_count") or 0),
-        name_key(display_name),
+        pool_name_key(display_name, variants),
     )
+
+
+def pool_name_key(display_name: str, variants: list[str]) -> str | None:
+    """The display name's key, else the first alternative spelling that has one.
+
+    ~14% of US authors have an initial-only display name ("W. Scott Young"),
+    which `name_key` rejects on purpose. Most prolific ones also list a full-name
+    variant in OpenAlex; keying on it makes them retrievable, and scoring is
+    unaffected because the matcher already compares every variant.
+    """
+    key = name_key(display_name)
+    if key:
+        return key
+    for variant in variants:
+        key = name_key(variant)
+        if key:
+            return key
+    return None
 
 
 def build(conn: psycopg.Connection, settings: Settings, http, resume: bool = True) -> dict:
@@ -110,9 +128,9 @@ def build(conn: psycopg.Connection, settings: Settings, http, resume: bool = Tru
     stopped rather than restarting. That is not a nicety — a job that restarts
     from zero on a dropped connection will never finish.
     """
-    from .reference import us_institution_states
+    from .reference import us_institution_ids
 
-    us_institutions = set(us_institution_states(conn))
+    us_institutions = us_institution_ids(conn)
     if not us_institutions:
         raise RuntimeError(
             "No US institutions in staging.openalex_institution — load the reference "

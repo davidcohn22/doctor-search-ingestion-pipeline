@@ -142,3 +142,31 @@ def test_threshold_summary_counts_the_bands():
     assert summarize_thresholds([0.95, 0.75, 0.1]) == {
         "accepted": 1, "held": 1, "dropped": 1
     }
+
+
+def test_name_similarity_ignores_case_punctuation_and_middle_names():
+    from pex_ingest.matching import name_similarity
+
+    assert name_similarity("Kari C. Nadeau", "kari c nadeau") == 1.0
+    assert name_similarity("Gary H. Lyman", "gary herbert lyman") == 1.0
+    assert name_similarity("Jon Smith", "Jonathan Smith") >= 0.9
+
+
+def test_different_first_name_is_never_accepted():
+    """National spot-check 2026-10-10: 'Mindie H. Nguyen' was accepted for Marielle."""
+    from pex_ingest.buckets.publications.matcher import score_candidate
+
+    physician = {"full_name": "marielle hanh nguyen", "practice_state": "CA",
+                 "specialty_labels": []}
+    candidate = {"display_name": "Mindie H. Nguyen", "name_variants": [],
+                 "affiliations": [], "topic_ids": [], "works_count": 2}
+    card = score_candidate(physician, candidate, {}, {}, namesakes=1)
+    assert "first_name_mismatch" in card.signals
+
+
+def test_mostly_non_medical_author_is_penalized():
+    from pex_ingest.buckets.publications.matcher import medical_topic_share
+
+    subfields = {"T1": "2208", "T2": "1708", "T3": "2740", "T4": "2312"}
+    assert medical_topic_share(["T1", "T2", "T3", "T4"], subfields) == 0.25
+    assert medical_topic_share([], subfields) is None

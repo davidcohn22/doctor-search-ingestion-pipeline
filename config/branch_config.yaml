@@ -70,14 +70,21 @@ prune:
 # ---------------------------------------------------------------------------
 # LLM enrichment (the only bucket that spends money — single-digit dollars).
 #
-# The runbook specifies claude-sonnet-5; opus-5 is the current general default and
-# costs ~$7 instead of ~$4 for the whole national job via the Batches API. This
-# output becomes user-visible search vocabulary and is expensive to re-audit
-# later, so it is picked on quality, not cost. Run `pex run conditions --compare-models`
-# on a 50-descriptor sample before committing if you want the comparison.
+# claude-sonnet-5-5 with thinking off. The task is a short, fixed-schema JSON
+# reply per descriptor — naming and synonym recall, not reasoning — so thinking
+# tokens buy nothing here and, at max_tokens 400, can crowd out the JSON and
+# truncate it. `between_tools` is how Sonnet 5.5 turns thinking off
+# ({"type": "disabled"} is a 400 on this model) and is only accepted at effort
+# `high` or below. Opus 5.5 cannot turn thinking off at all, and Opus 5 thinks
+# by default, which made both pricier and riskier for this job. Measured 2026-10-10:
+# ~357 input / ~188 output tokens per descriptor, so ≤ ~$8 for all ~6,200
+# descriptors via the Batches API (less after pruning). Run `pex run conditions --enrich --live --limit 50`
+# to eyeball a sample before committing the batch.
 # ---------------------------------------------------------------------------
 llm:
-  model: claude-opus-5
+  model: claude-sonnet-5-5
+  thinking: between_tools # thinking off — see above
+  effort: high
   max_tokens: 400
   use_batches: true       # 50% cheaper, no rate-limit management
   sample_size: 50         # for --compare-models

@@ -27,7 +27,7 @@ uv sync
 # Load the canonical schema from the docs repo, then this repo's additions.
 psql -d pex -f ../physician-expertise-docs/data/database/ddl/run-all.sql
 psql -d pex -f ../physician-expertise-docs/data/database/ddl/08-roles-and-grants.sql   # edit passwords first
-uv run pex migrate
+DATABASE_URL=postgresql://$USER@localhost:5432/pex uv run pex migrate   # as the schema owner
 
 uv run pex preflight                      # checks everything above in one command
 ```
@@ -58,7 +58,7 @@ Every bucket has finer-grained steps (`pex run publications --help`), because th
 | 2 | Medical school | CMS Doctors & Clinicians | none | $0 |
 | 3 | Publications | OpenAlex snapshot + PubMed + ORCID | NCBI key (free) | $0 via bulk snapshot |
 | 4 | Clinical trials | ClinicalTrials.gov v2 API | none | $0 |
-| 5 | Condition vocabulary | MeSH + MedlinePlus + Claude | Anthropic key | ~$7 |
+| 5 | Condition vocabulary | MeSH + MedlinePlus + Claude | Anthropic key | ≤ ~$8 |
 
 ## Layout
 

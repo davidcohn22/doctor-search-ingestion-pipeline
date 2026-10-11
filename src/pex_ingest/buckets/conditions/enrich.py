@@ -9,7 +9,7 @@ them.
 **Run it through the Message Batches API**, per
 docs/prerequisites/05-condition-vocabulary.md:
 
-  * 50% of standard token cost — the whole national job is ~$7 at Opus 5,
+  * 50% of standard token cost — the whole national job is ~$8 at Sonnet 5.5,
   * no rate-limit management: submit the job, poll, collect,
   * up to 100,000 requests per batch, results retrievable for 29 days.
 
@@ -59,6 +59,26 @@ POLL_TIMEOUT = 24 * 3600
 
 _JSON_BLOCK = re.compile(r"\{.*\}", re.S)
 
+DEFAULT_MODEL = "claude-sonnet-5-5"
+
+
+def model_params(config) -> dict:
+    """The model settings every call shares, from branch_config.yaml's `llm` block.
+
+    `thinking: between_tools` is how Sonnet 5.5 turns thinking off; it is only
+    accepted at effort `high` or below. Thinking adds nothing to a fixed-schema
+    reply this short, and at max_tokens 400 it can truncate the JSON.
+    """
+    params = {
+        "model": config.llm.get("model", DEFAULT_MODEL),
+        "max_tokens": int(config.llm.get("max_tokens", 400)),
+    }
+    if config.llm.get("thinking"):
+        params["thinking"] = {"type": config.llm["thinking"]}
+    if config.llm.get("effort"):
+        params["output_config"] = {"effort": config.llm["effort"]}
+    return params
+
 
 def build_requests(descriptors: list[dict], config) -> list[dict]:
     """One request per descriptor, keyed by its UI.
@@ -67,14 +87,12 @@ def build_requests(descriptors: list[dict], config) -> list[dict]:
     adds a join-back-by-index failure mode. Not worth it at these amounts — one
     descriptor per request with the UI as `custom_id` has nothing to misalign.
     """
-    model = config.llm.get("model", "claude-opus-5")
-    max_tokens = int(config.llm.get("max_tokens", 400))
+    params = model_params(config)
     return [
         {
             "custom_id": descriptor["mesh_id"],
             "params": {
-                "model": model,
-                "max_tokens": max_tokens,
+                **params,
                 "messages": [
                     {
                         "role": "user",
@@ -135,7 +153,7 @@ def run_batch(descriptors: list[dict], config, settings) -> dict[str, dict]:
     requests = build_requests(descriptors, config)
     log.info(
         "submitting %s descriptors to the Batches API (model %s)",
-        f"{len(requests):,}", config.llm.get("model", "claude-opus-5"),
+        f"{len(requests):,}", config.llm.get("model", DEFAULT_MODEL),
     )
 
     batch = client.messages.batches.create(requests=requests)
@@ -156,7 +174,10 @@ def run_batch(descriptors: list[dict], config, settings) -> dict[str, dict]:
             )
 
     results: dict[str, dict] = {}
-    outcomes = {"succeeded": 0, "errored": 0, "canceled": 0, "expired": 0, "unparsed": 0}
+    outcomes = {
+        "succeeded": 0, "errored": 0, "canceled": 0, "expired": 0,
+        "refused": 0, "truncated": 0, "unparsed": 0,
+    }
 
     for entry in client.messages.batches.results(batch.id):
         mesh_id = entry.custom_id           # never positional — see the module docstring
@@ -167,6 +188,16 @@ def run_batch(descriptors: list[dict], config, settings) -> dict[str, dict]:
             continue
 
         message = entry.result.message
+        # A batch request that "succeeded" can still have been declined by a
+        # safety classifier or cut off at max_tokens; neither is usable output.
+        if message.stop_reason == "refusal":
+            outcomes["refused"] += 1
+            log.warning("descriptor %s: model declined", mesh_id)
+            continue
+        if message.stop_reason == "max_tokens":
+            outcomes["truncated"] += 1
+            log.warning("descriptor %s: reply hit max_tokens", mesh_id)
+            continue
         text = "".join(block.text for block in message.content if block.type == "text")
         parsed = parse_reply(text)
         if parsed is None:
@@ -176,11 +207,14 @@ def run_batch(descriptors: list[dict], config, settings) -> dict[str, dict]:
         results[mesh_id] = parsed
 
     log.info("batch %s complete: %s", batch.id, outcomes)
-    if outcomes.get("errored") or outcomes.get("expired") or outcomes["unparsed"]:
+    missing = sum(
+        outcomes.get(k, 0) for k in ("errored", "expired", "refused", "truncated", "unparsed")
+    )
+    if missing:
         log.warning(
             "%d descriptors got no enrichment — re-run to fill them; the loader "
             "keeps whatever it already has",
-            outcomes.get("errored", 0) + outcomes.get("expired", 0) + outcomes["unparsed"],
+            missing,
         )
     return results
 
@@ -195,13 +229,12 @@ def run_live(descriptors: list[dict], config, settings) -> dict[str, dict]:
 
     settings.require("anthropic_api_key")
     client = anthropic.Anthropic()
-    model = config.llm.get("model", "claude-opus-5")
+    params = model_params(config)
 
     results = {}
     for descriptor in descriptors:
         message = client.messages.create(
-            model=model,
-            max_tokens=int(config.llm.get("max_tokens", 400)),
+            **params,
             messages=[{
                 "role": "user",
                 "content": PROMPT.format(
@@ -209,6 +242,9 @@ def run_live(descriptors: list[dict], config, settings) -> dict[str, dict]:
                 ),
             }],
         )
+        if message.stop_reason in ("refusal", "max_tokens"):
+            log.warning("descriptor %s: stop_reason %s", descriptor["mesh_id"], message.stop_reason)
+            continue
         text = "".join(block.text for block in message.content if block.type == "text")
         parsed = parse_reply(text)
         if parsed:
@@ -226,7 +262,7 @@ def estimate_cost(descriptors: list[dict], config, settings) -> dict:
 
     settings.require("anthropic_api_key")
     client = anthropic.Anthropic()
-    model = config.llm.get("model", "claude-opus-5")
+    model = config.llm.get("model", DEFAULT_MODEL)
 
     sample = descriptors[: min(10, len(descriptors))]
     total_input = 0

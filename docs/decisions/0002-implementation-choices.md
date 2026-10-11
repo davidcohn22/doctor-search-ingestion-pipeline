@@ -58,13 +58,13 @@ this avoids is carrying ~10 GB of mostly-empty columns for provider types we wil
 Postgres, where the disk budget is tightest. Stated in the module docstring at the point it matters
 (`buckets/nppes/stage.py`).
 
-## 5. Condition vocabulary: tight scope, Opus 5, relative pruning
+## 5. Condition vocabulary: tight scope, Sonnet 5.5, relative pruning
 
 | Question | Choice | Reasoning |
 |---|---|---|
 | Tree scope | **C + F03 + E04** (~6,200 descriptors) | The prerequisites doc's own recommendation: start tight. E01/E02 can be added later by re-running those branches only. |
 | Exclusions | **F01, F02, F04, D**, explicitly | Taking all of `F` adds ~1,000 psychological-phenomena descriptors that look like conditions to a prefix filter but aren't. |
-| Model | **`claude-opus-5`** via the Batches API | The runbook says `claude-sonnet-5`; the prerequisites doc says pick on output quality, not cost, since this becomes user-visible search vocabulary. The gap is ~$7 vs ~$4 for the entire national job. `--live --limit 50` exists to run the comparison before committing. |
+| Model | **`claude-sonnet-5-5`, thinking off (`between_tools`), effort `high`**, via the Batches API | Changed from `claude-opus-5` on 2026-10-10. The task is a short fixed-schema JSON reply per descriptor, where thinking adds cost and truncation risk but no quality. Opus 5.5 cannot turn thinking off and Opus 5 thinks by default; at measured token counts (357 in / 188 out) Opus would land at $16–20+ before thinking, against a $20 API budget. Sonnet 5.5 is ≤ ~$8. `--live --limit 50` checks a sample before the batch. |
 | Pruning | **top-N per branch, with the absolute count as a floor** | The runbook's ≥25 was sized for one narrow vertical; nationally it stops filtering. A relative rule also self-corrects as the corpus grows. |
 | `branch_config.yaml` | **National form** — branch include/exclude lists, no per-specialty stanzas | Per the prerequisites doc: "all specialties" makes the per-specialty version unwritable. |
 | `condition_taxonomy` | **Derived from who publishes**, not authored | The inverted mapping the prerequisites doc calls for. Implemented in `taxonomy_map.py`. |

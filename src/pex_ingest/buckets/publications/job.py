@@ -51,8 +51,19 @@ def build_pool(settings: Settings, resume: bool = True) -> None:
             run.note("sanity_warning", warning)
 
 
-def match(settings: Settings, rebuild_index: bool = True, use_orcid: bool = True) -> None:
-    """Run the matcher. Free and local, so re-run it after any scoring change."""
+def _match_partition(settings: Settings, use_orcid: bool, k: int, n: int) -> dict:
+    with connect(settings) as conn:
+        return dict(matcher.run(conn, settings, use_orcid=use_orcid, partition=(k, n)))
+
+
+def match(
+    settings: Settings, rebuild_index: bool = True, use_orcid: bool = True, workers: int = 1
+) -> None:
+    """Run the matcher. Free and local, so re-run it after any scoring change.
+
+    ~300M candidate pairs nationally score at ~17K pairs/s per process, about 5
+    hours single-threaded; `workers` splits the physicians across processes.
+    """
     with connect(settings) as conn, RunSummary("openalex_match", conn) as run:
         run.report_path = settings.report_dir / "openalex_match.json"
         if rebuild_index:
@@ -60,17 +71,34 @@ def match(settings: Settings, rebuild_index: bool = True, use_orcid: bool = True
             # weekly — a stale index silently costs recall on new physicians.
             for key, value in rebuild_spine(conn, settings).items():
                 run.add(f"spine_{key}", value)
-        for key, value in matcher.run(conn, settings, use_orcid=use_orcid).items():
-            run.add(key, value)
+        if workers > 1:
+            from concurrent.futures import ProcessPoolExecutor
+
+            with ProcessPoolExecutor(max_workers=workers) as pool:
+                futures = [
+                    pool.submit(_match_partition, settings, use_orcid, k, workers)
+                    for k in range(workers)
+                ]
+                for future in futures:
+                    for key, value in future.result().items():
+                        if isinstance(value, (int, float)):
+                            run.add(key, value)
+        else:
+            for key, value in matcher.run(conn, settings, use_orcid=use_orcid).items():
+                run.add(key, value)
+        run.add("demoted_shared_author_global", matcher.demote_shared_authors_in_db(conn))
         run.note("coverage", matcher.coverage(conn))
 
 
-def pull_works(settings: Settings, keep_edges: bool = True, resume: bool = True) -> None:
+def pull_works(
+    settings: Settings, keep_edges: bool = True, resume: bool = True, workers: int = 1
+) -> None:
     http = client_for(settings, "s3")
     with connect(settings) as conn, RunSummary("openalex_works", conn) as run:
         run.report_path = settings.report_dir / "openalex_works.json"
         for key, value in works.build(
-            conn, settings, http, keep_edges=keep_edges, resume=resume
+            conn, settings, http, keep_edges=keep_edges, resume=resume,
+            http_factory=lambda: client_for(settings, "s3"), workers=workers,
         ).items():
             run.add(key, value)
 

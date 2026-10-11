@@ -37,19 +37,17 @@ Start tight. E01/E02 can be added later by re-running the pipeline for those bra
 
 Note **F01/F02/F04 must be excluded explicitly.** Taking all of `F` adds ~1,000 psychological-phenomena descriptors that look like conditions to a branch-prefix filter but aren't, and they will produce confident, useless synonyms.
 
-### Cost: not a consideration
+### Cost: small, but measured
 
-Estimated for ~6,000 descriptors surviving the prune (75% of 8,009), one call each, via the Batches API:
+Measured 2026-10-10 with one live call on the real prompt: **357 input / 188 output tokens per descriptor** (the earlier 113/71 estimate was ~3× low). For ~6,200 descriptors, one call each, via the Batches API:
 
-| Model | Live | **Batches (50% off)** |
-|---|---:|---:|
-| Claude Opus 5 | $14.11 | **$7.05** |
-| Claude Sonnet 5 | $8.46 | $4.23 |
-| Haiku 4.5 | $2.82 | $1.41 |
+| Model | Live | **Batches (50% off)** | Thinking |
+|---|---:|---:|---|
+| **Claude Sonnet 5.5 (chosen)** | $16.10 | **$8.05** | off (`between_tools`) |
+| Claude Opus 5.5 | $32.20 | $16.10 + thinking | cannot be turned off |
+| Claude Haiku 5.5 | $0.81 | $0.40 | adaptive, can be disabled |
 
-Ten full re-runs at Opus 5 is ~$70. **Pick the model on output quality, not on cost** — this output becomes user-visible search vocabulary, and the difference between tiers is a few dollars against a job you'll run a handful of times.
-
-_Estimates, not tokenizer-measured (~113 input / ~71 output tokens per descriptor at 3.6 chars/token; pricing per the Claude API reference, cached 2026-06-24). Verify with `client.messages.count_tokens()` on the real prompt before relying on the absolute figures — the ratios between tiers are what matter here, and those are exact._
+These are ceilings: pruning drops descriptors before enrichment. With a $20 API budget, Opus-tier leaves no room for a re-run; Sonnet 5.5 leaves room for two. The task (patient-friendly names and synonyms, fixed JSON schema) is recall, not reasoning, which is why thinking is off.
 
 Batching ~20 descriptors per request cuts it further (~$5.55 at Opus 5) by amortizing the instruction block, but adds a join-back-by-index failure mode. **Not worth it at these amounts** — one descriptor per request with the descriptor UI as `custom_id` is safer and the saving is $1.50. Prompt caching doesn't apply either: at ~113 input tokens the prompt is far below the 512-token minimum cacheable prefix.
 
@@ -90,13 +88,13 @@ client = anthropic.Anthropic()      # reads ANTHROPIC_API_KEY from the environme
 uv run python -c "
 import anthropic
 r = anthropic.Anthropic().messages.create(
-    model='claude-opus-5', max_tokens=16,
+    model='claude-sonnet-5-5', max_tokens=16,
     messages=[{'role':'user','content':'Reply with OK'}])
 print(r.content[0].text, '| model:', r.model)
 "
 ```
 
-**On model choice:** the runbook specifies `claude-sonnet-5` for this task, which is a reasonable cost-conscious call — it's a short, narrow, high-volume prompt. The current general default is `claude-opus-5`. Worth one deliberate comparison on a sample of 50 descriptors before committing, since this output becomes user-visible search vocabulary and is expensive to re-audit later. Either model works with everything below.
+**On model choice:** `claude-sonnet-5-5` with thinking off (decided 2026-10-10, see [decisions/0002 §5](../decisions/0002-implementation-choices.md)). It's a short, narrow, high-volume prompt. Run `pex run conditions --enrich --live --limit 50` and read the sample before submitting the full batch, since this output becomes user-visible search vocabulary.
 
 ### Use the Batches API
 
@@ -165,7 +163,7 @@ The branch numbers above are illustrative, taken from the runbook. Verify each a
 
 ## Prerequisites checklist
 
-1. **`ANTHROPIC_API_KEY`** in `.env`, with a credit balance (~$10 covers the job several times over), verified with a live call.
+1. **`ANTHROPIC_API_KEY`** in `.env`, with a credit balance (~$10 covers one full run; budget is $20), verified with a live call.
 2. **Included/excluded tree branches decided** — start with C + F03 + E04; exclude F01/F02/F04 and all of D explicitly.
 3. **`branch_config.yaml` written** in its national form (branch include/exclude lists, not per-specialty stanzas — see [above](#the-real-cost-of-going-national-the-design-not-the-bill)), with every branch validated against `desc2026.gz`.
 4. **Bucket 3 loaded** — needed for both the pruning step *and* the specialty mapping under national scope. The parse can run before this; promotion to `active` cannot.

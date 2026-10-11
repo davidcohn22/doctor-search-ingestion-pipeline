@@ -43,6 +43,24 @@ ON CONFLICT (name) DO UPDATE SET
 RETURNING condition_id
 """
 
+# A condition's identity is its defining (primary) MeSH descriptor, not its
+# display name: the LLM can word a name differently on any re-run, and keying on
+# the name made every re-enrich insert a duplicate of each renamed condition.
+EXISTING_BY_MESH = """
+SELECT m.mesh_id, m.condition_id FROM condition_mesh m WHERE m.is_primary
+"""
+
+UPDATE_CONDITION = """
+UPDATE condition SET
+    name        = %(name)s,
+    kind        = %(kind)s,
+    description = coalesce(%(description)s, description),
+    updated_at  = now()
+    -- `status` untouched, as in UPSERT_CONDITION.
+WHERE condition_id = %(condition_id)s
+RETURNING condition_id
+"""
+
 UPSERT_MESH = """
 INSERT INTO condition_mesh (condition_id, mesh_id, is_primary)
 VALUES (%(condition_id)s, %(mesh_id)s, %(is_primary)s)
@@ -127,6 +145,9 @@ def run(
         cur.execute(ENTRY_TERMS, (mesh_ids,))
         terms = {row[0]: (row[1], row[2] or []) for row in cur.fetchall()}
 
+        cur.execute(EXISTING_BY_MESH)
+        existing = dict(cur.fetchall())
+
     stats = {"conditions": 0, "mesh_links": 0, "synonyms": 0, "name_collisions": 0,
              "skipped_not_searchable": 0}
     used_names: dict[str, str] = {}
@@ -155,11 +176,23 @@ def run(
             used_names[name.lower()] = mesh_id
 
             kind = (llm or {}).get("kind") or survivor.get("kind") or "condition"
-            cur.execute(UPSERT_CONDITION, {
+            params = {
                 "name": name,
                 "kind": kind if kind in ("condition", "procedure") else "condition",
                 "description": _description(medline, llm),
-            })
+                "condition_id": existing.get(mesh_id),
+            }
+            if params["condition_id"] is None:
+                cur.execute(UPSERT_CONDITION, params)
+            else:
+                try:
+                    with conn.transaction():
+                        cur.execute(UPDATE_CONDITION, params)
+                except psycopg.errors.UniqueViolation:
+                    # The new name belongs to another condition: qualify it.
+                    params["name"] = f"{name} ({mesh_name})"
+                    stats["name_collisions"] += 1
+                    cur.execute(UPDATE_CONDITION, params)
             condition_id = cur.fetchone()[0]
             stats["conditions"] += 1
 

@@ -29,9 +29,9 @@ Nothing here requires a purchase, a contract, or an approval queue. Four of the 
 | 2. CMS medical school | none | $0 | No |
 | 3. Publications | NCBI key (free), OpenAlex key (free tier) | $0 via snapshot | **Yes** — snapshot vs API |
 | 4. Clinical trials | none | $0 | No |
-| 5. Condition vocabulary | Anthropic API key | **~$7** national, all specialties | No — scope decided |
+| 5. Condition vocabulary | Anthropic API key | **≤ ~$8** national, all specialties | No — scope decided |
 
-**Launch scope is national, all specialties** (supersedes the narrowed-vertical assumption in ADR 0001). Total money cost across all five buckets is the ~$7 Anthropic spend in bucket 5; everything else is free. The binding constraints are download time, local compute for matching, and human QA review — not dollars.
+**Launch scope is national, all specialties** (supersedes the narrowed-vertical assumption in ADR 0001). Total money cost across all five buckets is the ≤ ~$8 Anthropic spend in bucket 5; everything else is free. The binding constraints are download time, local compute for matching, and human QA review — not dollars.
 
 ## Where files live
 

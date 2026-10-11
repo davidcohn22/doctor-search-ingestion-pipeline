@@ -13,6 +13,16 @@ pex migrate
 
 Each file runs once and is recorded in `staging.schema_migration`, so re-running is a no-op.
 
+**Run `pex migrate` as the schema owner, not as `pex_ingest`.** Migration 0001 alters
+`public.work`, which only its owner may do. With Postgres.app that is your macOS user:
+
+```bash
+DATABASE_URL=postgresql://$USER@localhost:5432/pex uv run pex migrate
+```
+
+Tables the owner creates pick up `pex_ingest`'s grants through the default privileges in
+`08-roles-and-grants.sql`.
+
 ## The rule these follow
 
 The docs-repo DDL is the contract between this pipeline and the .NET serving application
