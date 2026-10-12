@@ -33,7 +33,7 @@ import psycopg
 
 from ...config import Settings
 from ...db import Jsonb, analyze, copy_rows, upsert
-from ...state import add_marker, get_marker
+from ...state import add_marker, clear_marker, get_marker
 from .snapshot import WORK_COLUMNS, manifest, openalex_id, read_part, save_manifest
 
 log = logging.getLogger("pex.openalex.works")
@@ -72,12 +72,15 @@ ON CONFLICT (openalex_work_id) DO UPDATE SET
 
 UPSERT_AUTHORSHIP = """
 INSERT INTO authorship (npi, openalex_work_id, openalex_author_id, author_position,
-                        confidence, retrieved_at)
-VALUES (%(npi)s, %(work_id)s, %(author_id)s, %(position)s, %(confidence)s, now())
+                        confidence, institution_ids, country_codes, retrieved_at)
+VALUES (%(npi)s, %(work_id)s, %(author_id)s, %(position)s, %(confidence)s,
+        %(institution_ids)s, %(country_codes)s, now())
 ON CONFLICT (npi, openalex_work_id) DO UPDATE SET
     openalex_author_id = EXCLUDED.openalex_author_id,
     author_position    = EXCLUDED.author_position,
     confidence         = EXCLUDED.confidence,
+    institution_ids    = EXCLUDED.institution_ids,
+    country_codes      = EXCLUDED.country_codes,
     retrieved_at       = now()
 """
 
@@ -108,6 +111,24 @@ def position_of(authorship: dict) -> str:
     """Normalize OpenAlex's author_position to our CHECK-constrained vocabulary."""
     raw = (authorship.get("author_position") or "middle").lower()
     return raw if raw in ("first", "middle", "last") else "middle"
+
+
+def affiliation_of(authorship: dict) -> tuple[list[str], list[str]]:
+    """The institutions and countries printed for this author on this paper.
+
+    This is what lets a merged OpenAlex profile be split per paper: the profile
+    may mix several same-name people, but each paper says where *its* author was.
+    """
+    institutions = sorted({
+        inst_id for inst_id in (
+            openalex_id(i) for i in (authorship.get("institutions") or []) if i
+        ) if inst_id
+    })
+    countries = {c.upper() for c in (authorship.get("countries") or []) if c}
+    for institution in authorship.get("institutions") or []:
+        if institution and institution.get("country_code"):
+            countries.add(institution["country_code"].upper())
+    return institutions, sorted(countries)
 
 
 def _iso(value) -> str | None:
@@ -181,7 +202,10 @@ def read_and_project(http, part, authors: dict, us_authors: set, keep_edges: boo
             if keep_edges and author_id in us_authors:
                 edge_rows.append((author_id, work_id, position))
 
-            for npi, confidence in authors.get(author_id, ()):
+            matched = authors.get(author_id, ())
+            if matched:
+                institutions, countries = affiliation_of(authorship)
+            for npi, confidence in matched:
                 relevant = True
                 authorship_rows.append({
                     "npi": npi,
@@ -191,6 +215,8 @@ def read_and_project(http, part, authors: dict, us_authors: set, keep_edges: boo
                     # "A paper is only as certain as the identity match behind
                     # it" — inherited, never invented here.
                     "confidence": confidence,
+                    "institution_ids": Jsonb(institutions),
+                    "country_codes": Jsonb(countries),
                 })
 
         if relevant:
@@ -222,6 +248,8 @@ def build(
     parts = manifest(http, "works")
     save_manifest(parts, settings.path("openalex", "works", "manifest.json"))
     done = get_marker(conn, JOB) if resume else set()
+    if not resume:
+        clear_marker(conn, JOB)
     if done:
         log.info("resuming: %d of %d work part files already processed", len(done), len(parts))
 

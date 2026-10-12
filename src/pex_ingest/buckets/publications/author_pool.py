@@ -29,7 +29,7 @@ import psycopg
 from ...config import Settings
 from ...db import analyze, copy_rows, truncate
 from ...names import name_key
-from ...state import add_marker, get_marker
+from ...state import add_marker, clear_marker, get_marker
 from .snapshot import AUTHOR_COLUMNS, manifest, openalex_id, read_part, save_manifest
 
 log = logging.getLogger("pex.openalex.authors")
@@ -95,11 +95,29 @@ def slim_author(record: dict, us_institutions: set[str]) -> tuple | None:
         display_name,
         json.dumps(variants[:20]),
         orcid,
-        json.dumps(affiliations[:20]),
+        json.dumps(recent_affiliations(affiliations)),
         json.dumps([t for t in topics if t]),
         int(record.get("works_count") or 0),
         pool_name_key(display_name, variants),
     )
+
+
+MAX_AFFILIATIONS = 20
+
+
+def recent_affiliations(affiliations: list[dict], limit: int = MAX_AFFILIATIONS) -> list[dict]:
+    """The `limit` most recently active affiliations, newest first.
+
+    OpenAlex lists affiliations ordered by institution id, not by date, so
+    cutting the raw list kept an arbitrary subset: a prolific author's current
+    employer could be dropped while a one-year visit from 1996 was kept. The
+    foreign-namesake penalty in the matcher judges an author by their recent
+    affiliations, so the cut has to keep those (found 2026-10-11: 11% of
+    accepted matches had a truncated list).
+    """
+    return sorted(
+        affiliations, key=lambda a: max(a.get("years") or [0]), reverse=True
+    )[:limit]
 
 
 def pool_name_key(display_name: str, variants: list[str]) -> str | None:
@@ -146,6 +164,7 @@ def build(conn: psycopg.Connection, settings: Settings, http, resume: bool = Tru
     if done:
         log.info("resuming: %d of %d part files already loaded", len(done), len(parts))
     else:
+        clear_marker(conn, JOB)
         truncate(conn, "staging.openalex_author_pool")
         with conn.cursor() as cur:
             cur.execute(DROP_INDEX)   # loading is much faster without it

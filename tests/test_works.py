@@ -58,3 +58,17 @@ def test_concurrent_reads_write_in_manifest_order(monkeypatch):
     stats = works.build(None, Settings(), None, keep_edges=False, workers=4)
     assert written == [f"p{i}" for i in range(1, 12)]
     assert stats["records"] == 11
+
+
+def test_authorship_affiliation_captures_institutions_and_countries():
+    from pex_ingest.buckets.publications.works import affiliation_of
+
+    authorship = {
+        "institutions": [
+            {"id": "https://openalex.org/I46247651", "country_code": "ca"},
+            {"id": "https://openalex.org/I1", "country_code": None},
+        ],
+        "countries": ["CA", "US"],
+    }
+    assert affiliation_of(authorship) == (["I1", "I46247651"], ["CA", "US"])
+    assert affiliation_of({}) == ([], [])

@@ -1,5 +1,7 @@
 # Prerequisites: Bucket 5 — Condition Vocabulary (MeSH)
 
+> **Retired 2026-10-11.** The MeSH-derived vocabulary this runbook builds was replaced by generated concepts (`pex vocab …`, `src/pex_ingest/vocabulary/`), and `pex run conditions` now refuses to run. The current runbook is the docs repo's `data/ingestion/condition-vocabulary.md`; ADR 0005 there records why. This file is kept for history.
+
 Everything that must be true before the condition-vocabulary pipeline runs. The only bucket that spends money, the only one with a hand-written input file, and the only one that can't finish until bucket 3 is loaded.
 
 Runbook: [data/ingestion/condition-vocabulary.md](https://github.com/davidcohn22/physician-expertise-docs/blob/main/data/ingestion/condition-vocabulary.md)

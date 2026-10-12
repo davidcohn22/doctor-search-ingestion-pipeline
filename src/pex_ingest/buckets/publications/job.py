@@ -28,7 +28,7 @@ from ...db import connect
 from ...http import client_for
 from ...runs import RunSummary
 from ...spine import rebuild as rebuild_spine
-from . import author_pool, deltas, matcher, mesh, reference, works
+from . import author_pool, deltas, matcher, mesh, orcid_check, reference, works
 
 log = logging.getLogger("pex.publications")
 
@@ -66,6 +66,9 @@ def match(
     """
     with connect(settings) as conn, RunSummary("openalex_match", conn) as run:
         run.report_path = settings.report_dir / "openalex_match.json"
+        with conn.cursor() as cur:
+            cur.execute("SELECT now()")
+            started = cur.fetchone()[0]
         if rebuild_index:
             # The name index is derived from the spine, and the spine moves
             # weekly — a stale index silently costs recall on new physicians.
@@ -87,7 +90,99 @@ def match(
             for key, value in matcher.run(conn, settings, use_orcid=use_orcid).items():
                 run.add(key, value)
         run.add("demoted_shared_author_global", matcher.demote_shared_authors_in_db(conn))
+        run.add("stale_matches_removed", remove_stale_matches(conn, started))
         run.note("coverage", matcher.coverage(conn))
+
+
+def remove_stale_matches(conn, started) -> int:
+    """Delete matcher-made links this run no longer produced.
+
+    The matcher only writes pairs that clear the held line, so a pair that used
+    to be accepted and now scores below it was never revisited: it stayed
+    'accepted', papers and all. A full run rewrites every pair it still believes
+    in (matched_at = now()), so anything older that the matcher itself made is
+    stale. Human verdicts ('rejected', claim flow) and API-fallback links are
+    left alone. Deleting a link cascades to its authorship rows.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM physician_author
+            WHERE matched_at < %s
+              AND status IN ('accepted', 'held')
+              AND match_method IN ('pool_seed', 'orcid_confirmed')
+            """,
+            (started,),
+        )
+        removed = cur.rowcount
+    conn.commit()
+    log.info("removed %s stale matcher links", f"{removed:,}")
+    return removed
+
+
+def orcid_fetch(settings: Settings, limit: int | None = None, workers: int = 6) -> None:
+    with connect(settings) as conn, RunSummary("orcid_fetch", conn) as run:
+        for key, value in orcid_check.fetch(conn, settings, limit=limit, workers=workers).items():
+            run.add(key, value)
+
+
+def paper_filter(settings: Settings) -> None:
+    from . import paper_filter as pf
+
+    with connect(settings) as conn, RunSummary("paper_filter", conn) as run:
+        for key, value in pf.run(conn).items():
+            run.add(key, value)
+
+
+def orcid_dump(settings: Settings, archive) -> None:
+    from . import orcid_dump as dump
+
+    with connect(settings) as conn, RunSummary("orcid_dump", conn) as run:
+        for key, value in dump.load(conn, archive).items():
+            run.add(key, value)
+
+
+def orcid_apply(settings: Settings) -> None:
+    with connect(settings) as conn, RunSummary("orcid_apply", conn) as run:
+        for key, value in orcid_check.apply(conn).items():
+            run.add(key, value)
+
+
+REMOVE_UNACCEPTED_AUTHORSHIPS = """
+DELETE FROM authorship a
+WHERE NOT EXISTS (
+    SELECT 1 FROM physician_author pa
+    WHERE pa.npi = a.npi
+      AND pa.openalex_author_id = a.openalex_author_id
+      AND pa.status = 'accepted'
+)
+"""
+
+REMOVE_ORPHAN_WORKS = """
+DELETE FROM work w
+WHERE NOT EXISTS (SELECT 1 FROM authorship a WHERE a.openalex_work_id = w.openalex_work_id)
+"""
+
+
+def remove_demoted(settings: Settings) -> None:
+    """Delete papers attached through any link that is no longer accepted.
+
+    Demoting a match (accepted → held) changes a status flag, and nothing
+    downstream looked at it again: the doctor kept every paper the link had
+    brought in. This makes "only accepted links carry papers" true again, then
+    drops works no doctor holds any more. Run after every matcher or ORCID
+    change, before the features rebuild.
+    """
+    with connect(settings) as conn, RunSummary("remove_demoted", conn) as run:
+        with conn.cursor() as cur:
+            cur.execute(REMOVE_UNACCEPTED_AUTHORSHIPS)
+            run.add("authorships_removed", cur.rowcount)
+            cur.execute(REMOVE_ORPHAN_WORKS)
+            run.add("works_removed", cur.rowcount)
+        conn.commit()
+        from ...db import analyze
+
+        analyze(conn, "authorship", "work")
 
 
 def pull_works(

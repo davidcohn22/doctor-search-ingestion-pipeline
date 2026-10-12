@@ -170,3 +170,39 @@ def test_mostly_non_medical_author_is_penalized():
     subfields = {"T1": "2208", "T2": "1708", "T3": "2740", "T4": "2312"}
     assert medical_topic_share(["T1", "T2", "T3", "T4"], subfields) == 0.25
     assert medical_topic_share([], subfields) is None
+
+
+def test_mostly_foreign_recent_affiliations_block_an_accept():
+    """2026-10-11: the Winnipeg IBD researcher was accepted for a Los Angeles namesake."""
+    from pex_ingest.buckets.publications.matcher import recent_us_share, score_candidate
+
+    countries = {"UCLA": "US", "WINNIPEG": "CA", "TORONTO": "CA"}
+    affiliations = [
+        {"inst": "WINNIPEG", "years": [2025, 2024, 2023, 2021, 2019, 2017]},
+        {"inst": "TORONTO", "years": [2022, 2020]},
+        {"inst": "UCLA", "years": [2018, 1996]},
+    ]
+    assert recent_us_share(affiliations, countries, current_year=2026) == 1 / 9
+    # Old affiliations don't count; no recent ones at all is no evidence.
+    assert recent_us_share([{"inst": "WINNIPEG", "years": [1990]}], countries, 2026) is None
+
+    physician = {"full_name": "charles n bernstein", "practice_state": "CA",
+                 "specialty_labels": []}
+    candidate = {"display_name": "Charles N. Bernstein", "name_variants": [],
+                 "affiliations": affiliations, "topic_ids": [], "works_count": 900}
+    states = {"UCLA": "CA"}
+    penalized = score_candidate(physician, candidate, states, {}, 5, countries)
+    plain = score_candidate(physician, candidate, states, {}, 5)
+    assert "mostly_foreign_recent_affiliations" in penalized.signals
+    assert penalized.final() < plain.final() - 0.2
+
+
+def test_us_based_author_with_a_stint_abroad_is_not_penalized():
+    from pex_ingest.buckets.publications.matcher import recent_us_share
+
+    countries = {"MGH": "US", "OXFORD": "GB"}
+    affiliations = [
+        {"inst": "MGH", "years": [2025, 2024, 2023, 2022, 2021]},
+        {"inst": "OXFORD", "years": [2019, 2018]},
+    ]
+    assert recent_us_share(affiliations, countries, current_year=2026) > 0.5

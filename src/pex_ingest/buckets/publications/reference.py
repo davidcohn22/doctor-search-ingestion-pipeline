@@ -232,3 +232,17 @@ def topic_subfields(conn: psycopg.Connection) -> dict[str, str]:
             "WHERE subfield_id IS NOT NULL"
         )
         return dict(cur.fetchall())
+
+
+def institution_countries(conn: psycopg.Connection) -> dict[str, str]:
+    """{institution_id: 'CA'} for every institution with a known country.
+
+    The foreign-namesake check needs to know where *non*-US affiliations are, so
+    unlike `us_institution_states` this covers the whole reference set.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT openalex_institution_id, country_code FROM staging.openalex_institution "
+            "WHERE country_code IS NOT NULL"
+        )
+        return dict(cur.fetchall())

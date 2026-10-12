@@ -182,3 +182,19 @@ def add_marker(conn: psycopg.Connection, job: str, item: str) -> None:
             (job, Jsonb(notes)),
         )
     conn.commit()
+
+
+def clear_marker(conn: psycopg.Connection, job: str) -> None:
+    """Forget a set-shaped bookmark, so a fresh (non-resumed) pass starts clean.
+
+    Without this, a `--no-resume` pass would add its parts to the previous
+    pass's completed set, and if it were interrupted, resuming would skip every
+    part the *previous* pass finished.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE staging.ingest_state SET notes = notes - 'completed', updated_at = now() "
+            "WHERE job = %s AND jsonb_typeof(notes) = 'object'",
+            (job,),
+        )
+    conn.commit()

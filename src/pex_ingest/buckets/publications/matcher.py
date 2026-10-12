@@ -38,7 +38,7 @@ from ...matching import (
 )
 from ...names import parse_name
 from ...specialties import specialty_fit
-from . import orcid as orcid_api
+from .orcid_check import BLOCKING_SIGNALS, verdict
 
 log = logging.getLogger("pex.openalex.matcher")
 
@@ -68,9 +68,13 @@ FIRST_NAME_PENALTY = 0.15
 MAX_WORKS = 4_000
 BLOB_PENALTY = 0.25
 
-# Candidates carrying an ORCID and scoring in this band are worth an API call:
-# below it the pair is hopeless, above it already accepted.
+# Candidates carrying an ORCID and scoring at least this much can be confirmed by
+# their ORCID record; below it the pair is hopeless whatever ORCID says.
 ORCID_CHECK_BAND = (0.45, 0.95)
+# An ORCID record listing only non-US affiliations belongs to someone abroad.
+ORCID_FOREIGN_PENALTY = 0.30
+# An ORCID whose owner has a different first name belongs to someone else.
+ORCID_NAME_PENALTY = 0.15
 
 # Rarity counts physicians sharing the full first + last name. It used to count
 # the lookup key (surname + first initial), which made "Emery Brown" as common as
@@ -133,6 +137,43 @@ def author_states(affiliations, institution_states: dict) -> set[str]:
     return states
 
 
+# Foreign namesakes (2026-10-11). The state signal gives full credit for *ever*
+# having an affiliation in the physician's state, so one US visit outweighed a
+# decade abroad: the #1 IBD result was a Los Angeles doctor credited with 452
+# papers by the Winnipeg IBD researcher of the same name. A profile whose recent
+# affiliations are mostly outside the US is evidence of a different person.
+RECENT_YEARS = 10
+MIN_US_SHARE = 0.5
+FOREIGN_PENALTY = 0.25
+
+
+def recent_us_share(
+    affiliations, institution_countries: dict, current_year: int | None = None
+) -> float | None:
+    """Share of an author's recent affiliation-years at US institutions.
+
+    Each (institution, year) pair in the last RECENT_YEARS counts once, so a
+    decade at one Canadian hospital outweighs a single year's US co-affiliation.
+    None when the author has no recent affiliation with a known country, which
+    is no evidence either way.
+    """
+    import datetime
+
+    year_now = current_year or datetime.date.today().year
+    us = total = 0
+    for affiliation in affiliations or []:
+        country = institution_countries.get(affiliation.get("inst"))
+        if not country:
+            continue
+        recent = sum(1 for y in affiliation.get("years") or [] if y and y > year_now - RECENT_YEARS)
+        total += recent
+        if country == "US":
+            us += recent
+    if total == 0:
+        return None
+    return us / total
+
+
 def author_subfields(topic_ids, topic_subfields: dict) -> list[str]:
     """An author's research topics reduced to OpenAlex subfield ids."""
     return [topic_subfields[t] for t in topic_ids or [] if topic_subfields.get(t)]
@@ -165,6 +206,7 @@ def score_candidate(
     institution_states: dict,
     topic_subfields: dict,
     namesakes: int,
+    institution_countries: dict | None = None,
 ) -> ScoreCard:
     """Score one (physician, author) pair. No I/O — ORCID is applied separately."""
     card = ScoreCard()
@@ -219,20 +261,47 @@ def score_candidate(
     if share is not None and share < MIN_MEDICAL_SHARE:
         card.penalize("non_medical_topics", NON_MEDICAL_PENALTY)
 
+    if institution_countries:
+        us_share = recent_us_share(candidate.get("affiliations"), institution_countries)
+        if us_share is not None and us_share < MIN_US_SHARE:
+            card.penalize("mostly_foreign_recent_affiliations", FOREIGN_PENALTY)
+
     if (candidate.get("works_count") or 0) > MAX_WORKS:
         card.penalize("probable_merged_entity", BLOB_PENALTY)
 
     return card
 
 
-def demote_shared_authors(rows: list[dict], stats) -> int:
-    """Turn 'accepted' into 'held' for any author accepted for 2+ physicians."""
-    from collections import Counter
+def load_orcid_affiliations(conn: psycopg.Connection) -> dict[str, tuple[list, str | None]]:
+    """{orcid: (affiliations, owner's given names)} from the ORCID check's records."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('staging.orcid_record')")
+        if cur.fetchone()[0] is None:
+            return {}
+        cur.execute("SELECT orcid, affiliations, given_names FROM staging.orcid_record "
+                    "WHERE http_status = 200")
+        return {orcid: (affiliations, given) for orcid, affiliations, given in cur.fetchall()}
 
-    owners = Counter(r["author_id"] for r in rows if r["status"] == "accepted")
-    demoted = 0
+
+def demote_shared_authors(rows: list[dict], stats) -> int:
+    """An author accepted for 2+ physicians keeps only a clear winner.
+
+    The best-scoring physician keeps the link when it beats the runner-up by at
+    least MIN_MARGIN; otherwise nothing separates them and every claim is held.
+    """
+    from ...matching import MIN_MARGIN
+
+    claims: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
-        if row["status"] == "accepted" and owners[row["author_id"]] > 1:
+        if row["status"] == "accepted":
+            claims[row["author_id"]].append(row)
+    demoted = 0
+    for claimants in claims.values():
+        if len(claimants) < 2:
+            continue
+        claimants.sort(key=lambda r: r["confidence"], reverse=True)
+        clear = claimants[0]["confidence"] - claimants[1]["confidence"] >= MIN_MARGIN
+        for row in claimants[1:] if clear else claimants:
             row["status"] = "held"
             demoted += 1
     stats["accepted"] -= demoted
@@ -242,23 +311,35 @@ def demote_shared_authors(rows: list[dict], stats) -> int:
 
 
 DEMOTE_SHARED_AUTHORS = """
+WITH claims AS (
+    SELECT npi, openalex_author_id, confidence,
+           row_number() OVER w AS rank,
+           count(*) OVER (PARTITION BY openalex_author_id) AS claimants,
+           first_value(confidence) OVER w
+               - nth_value(confidence, 2) OVER (w ROWS BETWEEN UNBOUNDED PRECEDING
+                                                AND UNBOUNDED FOLLOWING) AS winner_margin
+    FROM physician_author
+    WHERE status = 'accepted'
+    WINDOW w AS (PARTITION BY openalex_author_id ORDER BY confidence DESC, npi)
+)
 UPDATE physician_author pa
 SET status = 'held',
     signals = coalesce(pa.signals, '{}'::jsonb) || '{"shared_author_demoted": true}'::jsonb
-WHERE pa.status = 'accepted'
-  AND pa.openalex_author_id IN (
-      SELECT openalex_author_id FROM physician_author
-      WHERE status = 'accepted'
-      GROUP BY openalex_author_id
-      HAVING count(DISTINCT npi) > 1
-  )
+FROM claims c
+WHERE pa.npi = c.npi AND pa.openalex_author_id = c.openalex_author_id
+  AND c.claimants > 1
+  -- A clear winner (ahead by MIN_MARGIN) keeps the author; everyone else, or
+  -- everyone when nothing separates them, is held.
+  AND NOT (c.rank = 1 AND c.winner_margin >= %(margin)s)
 """
 
 
 def demote_shared_authors_in_db(conn: psycopg.Connection) -> int:
     """The same rule as demote_shared_authors, across every worker's output."""
+    from ...matching import MIN_MARGIN
+
     with conn.cursor() as cur:
-        cur.execute(DEMOTE_SHARED_AUTHORS)
+        cur.execute(DEMOTE_SHARED_AUTHORS, {"margin": MIN_MARGIN})
         demoted = cur.rowcount
     conn.commit()
     log.info("demoted %s accepted rows whose author is claimed by 2+ physicians",
@@ -275,9 +356,10 @@ def run(
 ) -> dict:
     """Score every candidate pair and write `physician_author` rows."""
     from ...db import connect
-    from .reference import topic_subfields, us_institution_states
+    from .reference import institution_countries, topic_subfields, us_institution_states
 
     institution_states = us_institution_states(conn)
+    countries = institution_countries(conn)
     subfields = topic_subfields(conn)
     log.info(
         "loaded %s US institutions and %s topics for scoring",
@@ -286,7 +368,10 @@ def run(
     if not institution_states:
         raise RuntimeError("Reference sets are empty — geography scoring would never fire.")
 
-    orcid_client = orcid_api.OrcidChecker(conn, settings) if use_orcid else None
+    # ORCID evidence is read from records the ORCID check job already fetched
+    # (orcid_check.py), never requested here: inline calls at a polite pace made
+    # a national run take days, so the first run skipped ORCID entirely.
+    orcid_records = load_orcid_affiliations(conn) if use_orcid else {}
 
     npi_filter = "AND f.npi = ANY(%s)" if npis else ""
     params: tuple = (npis,) if npis else ()
@@ -343,7 +428,9 @@ def run(
                 "topic_ids": topic_ids,
                 "works_count": works_count,
             }
-            card = score_candidate(physician, candidate, institution_states, subfields, namesakes)
+            card = score_candidate(
+                physician, candidate, institution_states, subfields, namesakes, countries
+            )
             stats["pairs_scored"] += 1
             if stats["pairs_scored"] % 5_000_000 == 0:
                 # ~300M pairs nationally; without this the run is silent for hours.
@@ -352,14 +439,24 @@ def run(
                     f"{stats['pairs_scored']:,}", f"{stats['accepted']:,}", f"{stats['held']:,}",
                 )
 
-            # ORCID is the one signal worth an API call, and only in the band
-            # where it can change the outcome. An employment record naming an
-            # institution in the physician's practice state is about as close to
-            # proof as this problem gets.
-            if orcid_client and orcid and ORCID_CHECK_BAND[0] <= card.final() < ORCID_CHECK_BAND[1]:
-                if orcid_client.confirms(orcid, practice_state):
+            # An ORCID record naming an organization in the physician's practice
+            # state is about as close to proof as this problem gets; one listing
+            # only foreign affiliations is strong evidence of a namesake abroad.
+            if orcid and orcid in orcid_records:
+                affiliations, given = orcid_records[orcid]
+                result = verdict(affiliations, practice_state, given,
+                                 parse_name(full_name)[0])
+                blocked = any(card.signals.get(s) for s in BLOCKING_SIGNALS)
+                if (result == "confirmed" and not blocked
+                        and ORCID_CHECK_BAND[0] <= card.final() < ORCID_CHECK_BAND[1]):
                     card.override("orcid_confirmed", ORCID_CONFIRMED_SCORE)
                     stats["orcid_confirmations"] += 1
+                elif result == "foreign":
+                    card.penalize("orcid_foreign", ORCID_FOREIGN_PENALTY)
+                    stats["orcid_foreign"] += 1
+                elif result == "name_mismatch":
+                    card.penalize("orcid_name_mismatch", ORCID_NAME_PENALTY)
+                    stats["orcid_name_mismatch"] += 1
             if orcid:
                 card.signals["_orcid"] = orcid
 
@@ -367,8 +464,8 @@ def run(
 
     flush()
 
-    # One OpenAlex author is one human. Accepted for two different physicians,
-    # at least one is wrong and nothing here says which: demote all of them.
+    # One OpenAlex author is one human. Accepted for two different physicians, at
+    # least one is wrong: keep a clear winner, otherwise demote them all.
     demote_shared_authors(rows, stats)
 
     written = upsert(conn, UPSERT, rows)

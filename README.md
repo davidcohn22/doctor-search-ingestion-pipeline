@@ -41,14 +41,18 @@ uv run pex run nppes --seed          # bucket 1 — the physician spine (~1 hour
 uv run pex run cms                   # bucket 2 — medical school (minutes)
 uv run pex run publications --all    # bucket 3 — the long pole (hours)
 uv run pex run trials --seed         # bucket 4 — whole world corpus (~13 min)
-uv run pex run conditions --all      # bucket 5 — condition vocabulary
-uv run pex features                  # rebuild search features — after EVERY load
+uv run pex vocab list|merge|cards|assemble|check|review|load --run R   # bucket 5 — concept vocabulary
+uv run pex features                  # rebuild the tiered search features — after EVERY load
 uv run pex status                    # what has run, when, and what it did
 ```
 
 **Bucket 1 must load before any other** — the matchers in 3 and 4 read the spine as their input, and bucket 2 joins onto it. Buckets 2, 3 and 4 are independent of each other. Bucket 5 finalizes after 3, because its pruning step and its specialty mapping both need works in the database. See [run order](docs/prerequisites/README.md#run-order).
 
 Every bucket has finer-grained steps (`pex run publications --help`), because the expensive ones are worth running and inspecting a stage at a time.
+
+**Paper attribution** (2026-10-11), in this order after any matcher change: `--pool` (if the snapshot changed) → `--orcid-fetch` / `--orcid-dump` → `--match --workers 8` → `--orcid-apply` → `--remove-demoted` → `--works --no-edges --no-resume --workers 6` → `--paper-filter` → `--remove-demoted` → `pex features`. See the publications runbook in the docs repo for what each step fixes.
+
+**Concept vocabulary** (replaced `pex run conditions` on 2026-10-11): generated per specialty from `config/specialty_groups.yaml`, checked against the literature, loaded into the `condition*` tables. See `src/pex_ingest/vocabulary/job.py` and the docs repo's `data/ingestion/condition-vocabulary.md`.
 
 ## The five v1 buckets
 
@@ -58,7 +62,7 @@ Every bucket has finer-grained steps (`pex run publications --help`), because th
 | 2 | Medical school | CMS Doctors & Clinicians | none | $0 |
 | 3 | Publications | OpenAlex snapshot + PubMed + ORCID | NCBI key (free) | $0 via bulk snapshot |
 | 4 | Clinical trials | ClinicalTrials.gov v2 API | none | $0 |
-| 5 | Condition vocabulary | MeSH + MedlinePlus + Claude | Anthropic key | ≤ ~$8 |
+| 5 | Concept vocabulary | Claude (Sonnet 5.5 lists, Haiku 5.5 cards) + our paper corpus | Anthropic key | ~$8 per full run |
 
 ## Layout
 

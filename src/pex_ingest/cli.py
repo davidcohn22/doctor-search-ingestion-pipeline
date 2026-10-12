@@ -21,6 +21,7 @@ than a rewrite, and it is why there is no `--database-url` option here.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -129,8 +130,38 @@ def cmd_features(args) -> int:
 
     settings = _settings()
     with connect(settings) as conn, RunSummary("features", conn) as run:
-        for key, value in build.run(conn).items():
+        for key, value in build.run(conn, reuse_hits=args.reuse_hits).items():
             run.add(key, value)
+    return 0
+
+
+def cmd_vocab(args) -> int:
+    """The concept vocabulary (src/pex_ingest/vocabulary/job.py)."""
+    from .vocabulary import job as vocab
+
+    settings = _settings()
+    step = args.step
+    if step == "list":
+        result = vocab.list_concepts(settings, args.run, args.groups, args.live)
+    elif step == "merge":
+        result = vocab.merge_concepts(settings, args.run)
+    elif step == "cards":
+        result = vocab.write_cards(settings, args.run, args.live)
+    elif step == "assemble":
+        result = vocab.assemble(settings, args.run)
+    elif step == "check":
+        from .vocabulary import checks
+
+        result = checks.run(settings, args.run)
+    elif step == "review":
+        from .vocabulary import review
+
+        result = review.write(settings, args.run, args.groups)
+    elif step == "load":
+        from .vocabulary import load
+
+        result = load.run(settings, args.run)
+    print(json.dumps(result, indent=1, default=str))
     return 0
 
 
@@ -204,8 +235,19 @@ def cmd_run(args) -> int:
             pub_job.build_pool(settings, resume=not args.no_resume)
         if args.match:
             pub_job.match(settings, use_orcid=not args.no_orcid, workers=args.workers)
+        if args.orcid_fetch:
+            pub_job.orcid_fetch(settings, limit=args.limit, workers=args.workers)
+        if args.orcid_dump:
+            pub_job.orcid_dump(settings, Path(args.orcid_dump).expanduser())
+        if args.orcid_apply:
+            pub_job.orcid_apply(settings)
+        if args.paper_filter:
+            pub_job.paper_filter(settings)
+        if args.remove_demoted:
+            pub_job.remove_demoted(settings)
         if args.works:
-            pub_job.pull_works(settings, resume=not args.no_resume, workers=args.workers)
+            pub_job.pull_works(settings, resume=not args.no_resume, workers=args.workers,
+                               keep_edges=not args.no_edges)
         if args.backfill_edges:
             pub_job.backfill_edges(settings)
         if args.mesh:
@@ -226,7 +268,13 @@ def cmd_run(args) -> int:
             trial_job.load(settings, delta=args.delta, match=not args.no_match)
 
     elif bucket == "conditions":
-        from .buckets.conditions import job as cond_job
+        # Retired 2026-10-11: the MeSH-derived vocabulary was replaced by generated
+        # concepts (`pex vocab`, ADR 0005). Its loader would overwrite the condition*
+        # tables with rows the new schema rejects, so it no longer runs.
+        print("pex run conditions is retired; the vocabulary is built with `pex vocab` "
+              "(see src/pex_ingest/vocabulary/job.py).", file=sys.stderr)
+        return 2
+        from .buckets.conditions import job as cond_job  # noqa: F401 (kept for reference)
 
         if args.all:
             cond_job.run_all(settings)
@@ -265,8 +313,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("preflight", help="check the workstation").set_defaults(func=cmd_preflight)
     sub.add_parser("migrate", help="apply migrations/*.sql").set_defaults(func=cmd_migrate)
-    sub.add_parser("features", help="rebuild search features").set_defaults(func=cmd_features)
+    features = sub.add_parser("features", help="rebuild search features")
+    features.add_argument("--reuse-hits", action="store_true",
+                          help="recount from the last run's title/MeSH hits")
+    features.set_defaults(func=cmd_features)
     sub.add_parser("status", help="what has run and what it did").set_defaults(func=cmd_status)
+
+    vocab = sub.add_parser("vocab", help="concept vocabulary: generate, check, load")
+    vocab.add_argument("step", choices=["list", "merge", "cards", "assemble", "check",
+                                        "review", "load"])
+    vocab.add_argument("--run", required=True, help="run name, e.g. tune-urology-1")
+    vocab.add_argument("--groups", help="comma-separated specialty group ids")
+    vocab.add_argument("--live", action="store_true",
+                       help="live API calls instead of the Batches API")
+    vocab.set_defaults(func=cmd_vocab)
 
     run = sub.add_parser("run", help="run an ingestion bucket")
     run.set_defaults(func=cmd_run)
@@ -287,7 +347,19 @@ def build_parser() -> argparse.ArgumentParser:
     pubs.add_argument("--reference", action="store_true", help="institutions, topics, sources")
     pubs.add_argument("--pool", action="store_true", help="build the author pool")
     pubs.add_argument("--match", action="store_true", help="physician ↔ author matching")
+    pubs.add_argument("--orcid-fetch", action="store_true",
+                      help="fetch ORCID records for accepted and strong held matches")
+    pubs.add_argument("--orcid-dump", metavar="ARCHIVE",
+                      help="fill ORCID records from ORCID's Public Data File summaries")
+    pubs.add_argument("--orcid-apply", action="store_true",
+                      help="confirm, reject or promote matches from fetched ORCID records")
+    pubs.add_argument("--paper-filter", action="store_true",
+                      help="set aside papers that don't fit the doctor (merged profiles)")
+    pubs.add_argument("--remove-demoted", action="store_true",
+                      help="delete papers held through links that are no longer accepted")
     pubs.add_argument("--works", action="store_true", help="works pass over the snapshot")
+    pubs.add_argument("--no-edges", action="store_true",
+                      help="works pass without rewriting the unmatched-author edge list")
     pubs.add_argument("--backfill-edges", action="store_true",
                       help="attach local works to newly matched physicians")
     pubs.add_argument("--mesh", action="store_true", help="PubMed MeSH backfill")
@@ -306,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     trials.add_argument("--match-only", action="store_true", help="re-match without re-pulling")
     trials.add_argument("--no-match", action="store_true", help="pull without matching")
 
-    conditions = buckets.add_parser("conditions", help="bucket 5 — condition vocabulary")
+    conditions = buckets.add_parser("conditions", help="retired — use `pex vocab`")
     conditions.add_argument("--all", action="store_true", help="parse→prune→enrich→specialties→review")
     conditions.add_argument("--parse", action="store_true", help="download + parse MeSH")
     conditions.add_argument("--prune", action="store_true", help="apply publication thresholds")

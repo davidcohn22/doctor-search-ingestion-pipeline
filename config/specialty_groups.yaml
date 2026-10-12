@@ -1,0 +1,475 @@
+# Specialty groups the concept vocabulary is generated from (2026-10-11).
+#
+# The rule (Conditions & Search Refactor, "Specialty groups"): the main NUCC
+# specialties plus subspecialties with ~300+ active doctors in our data. The same
+# subspecialty under several NUCC classifications (Sports Medicine sits under five)
+# is one group. Each group lists:
+#
+#   codes      NUCC taxonomy codes whose doctors make up the group. A concept
+#              generated for the group is mapped to all of them in
+#              condition_taxonomy; the specialty filter matches at the NUCC
+#              classification level, so the subspecialty codes mostly add precision.
+#   subfields  OpenAlex subfields that count as "a paper in this specialty", for
+#              Tier 3 (loaded into specialty_field).
+#   generate   false for groups that don't treat patients directly (pathology,
+#              diagnostic radiology, public health). Their doctors still get Tier 1
+#              and Tier 2 evidence for any concept; they just never define concepts
+#              or pass a concept's specialty filter.
+#
+# Doctor counts are distinct active NPIs holding the code (pex, 2026-10-11).
+
+groups:
+  # --- Allergy, anesthesia, pain, critical care ---------------------------------
+  - id: allergy-immunology
+    name: Allergy & Immunology
+    codes: [207K00000X, 207KA0200X, 207RA0201X]
+    subfields: ["2723", "2403"]
+  - id: pediatric-allergy-immunology
+    name: Pediatric Allergy & Immunology
+    codes: [2080P0201X]
+    subfields: ["2723", "2735"]
+  - id: anesthesiology
+    name: Anesthesiology
+    codes: [207L00000X]
+    subfields: ["2703"]
+  - id: pediatric-anesthesiology
+    name: Pediatric Anesthesiology
+    codes: [207LP3000X]
+    subfields: ["2703", "2735"]
+  - id: pain-medicine
+    name: Pain Medicine
+    codes: [207LP2900X, 208VP0014X, 208VP0000X, 2081P2900X, 2084P2900X]
+    subfields: ["2703"]
+  - id: critical-care
+    name: Critical Care Medicine
+    codes: [207LC0200X, 207RC0200X, 2086S0102X, 2084A2900X]
+    subfields: ["2706"]
+
+  # --- Dermatology ---------------------------------------------------------------
+  - id: dermatology
+    name: Dermatology (including Mohs and procedural dermatology)
+    codes: [207N00000X, 207ND0101X, 207NS0135X]
+    subfields: ["2708"]
+  - id: pediatric-dermatology
+    name: Pediatric Dermatology
+    codes: [207NP0225X]
+    subfields: ["2708", "2735"]
+  - id: dermatopathology
+    name: Dermatopathology
+    codes: [207ND0900X, 207ZD0900X]
+    subfields: ["2708", "2734"]
+    generate: false
+
+  # --- Emergency and related -----------------------------------------------------
+  - id: emergency-medicine
+    name: Emergency Medicine
+    codes: [207P00000X, 207PE0004X]
+    subfields: ["2711"]
+  - id: pediatric-emergency-medicine
+    name: Pediatric Emergency Medicine
+    codes: [207PP0204X, 2080P0204X]
+    subfields: ["2711", "2735"]
+  - id: medical-toxicology
+    name: Medical Toxicology
+    codes: [207PT0002X]
+    subfields: ["3005", "2711"]
+  - id: hyperbaric-medicine
+    name: Undersea & Hyperbaric Medicine
+    codes: [207PE0005X, 2083P0011X]
+    subfields: ["2711"]
+
+  # --- Cross-cutting subspecialties ---------------------------------------------
+  - id: sports-medicine
+    name: Sports Medicine (non-surgical)
+    codes: [207PS0010X, 207QS0010X, 207RS0010X, 2080S0010X, 2081S0010X, 204C00000X]
+    subfields: ["2732", "3612"]
+  - id: hospice-palliative
+    name: Hospice & Palliative Medicine
+    codes: [207PH0002X, 207QH0002X, 207RH0002X, 2080H0002X]
+    subfields: ["2739", "2730"]
+  - id: addiction-medicine
+    name: Addiction Medicine and Addiction Psychiatry
+    codes: [207LA0401X, 207QA0401X, 207RA0401X, 2083A0300X, 2084A0401X, 2084P0802X]
+    subfields: ["2738", "3203"]
+  - id: sleep-medicine
+    name: Sleep Medicine
+    codes: [207QS1201X, 207RS0012X, 2080S0012X, 2084S0012X]
+    subfields: ["2728", "2740"]
+  - id: adolescent-medicine
+    name: Adolescent Medicine
+    codes: [207QA0000X, 207RA0000X, 2080A0000X]
+    subfields: ["2735"]
+  - id: obesity-medicine
+    name: Obesity Medicine
+    codes: [207QB0002X, 207RB0002X, 2083B0002X]
+    subfields: ["2712", "2916"]
+  - id: geriatric-medicine
+    name: Geriatric Medicine
+    codes: [207QG0300X, 207RG0300X]
+    subfields: ["2717"]
+
+  # --- Primary care ---------------------------------------------------------------
+  - id: family-medicine
+    name: Family Medicine and General Practice
+    codes: [207Q00000X, 207QA0505X, 208D00000X]
+    subfields: ["2714", "2739"]
+  - id: internal-medicine
+    name: Internal Medicine (general)
+    codes: [207R00000X]
+    subfields: ["2724", "2739"]
+  - id: hospitalist
+    name: Hospital Medicine
+    codes: [208M00000X]
+    subfields: ["2724"]
+    generate: false
+
+  # --- Internal medicine subspecialties -------------------------------------------
+  - id: cardiology
+    name: Cardiology (cardiovascular disease)
+    codes: [207RC0000X]
+    subfields: ["2705"]
+  - id: interventional-cardiology
+    name: Interventional Cardiology
+    codes: [207RI0011X]
+    subfields: ["2705"]
+  - id: electrophysiology
+    name: Clinical Cardiac Electrophysiology
+    codes: [207RC0001X]
+    subfields: ["2705"]
+  - id: heart-failure-transplant
+    name: Advanced Heart Failure and Transplant Cardiology
+    codes: [207RA0001X]
+    subfields: ["2705", "2747"]
+  - id: gastroenterology
+    name: Gastroenterology
+    codes: [207RG0100X]
+    subfields: ["2715", "2721"]
+  - id: hepatology
+    name: Hepatology and Transplant Hepatology
+    codes: [207RI0008X, 207RT0003X]
+    subfields: ["2721", "2747"]
+  - id: pulmonology
+    name: Pulmonary Disease
+    codes: [207RP1001X]
+    subfields: ["2740"]
+  - id: medical-oncology
+    name: Medical Oncology
+    codes: [207RX0202X, 207RH0003X]
+    subfields: ["2730", "1306"]
+  - id: hematology
+    name: Hematology (non-malignant and malignant blood disorders)
+    codes: [207RH0000X, 207RH0003X]
+    subfields: ["2720"]
+  - id: nephrology
+    name: Nephrology
+    codes: [207RN0300X]
+    subfields: ["2727"]
+  - id: infectious-disease
+    name: Infectious Disease
+    codes: [207RI0200X]
+    subfields: ["2725", "2406", "2404"]
+  - id: endocrinology
+    name: Endocrinology, Diabetes & Metabolism
+    codes: [207RE0101X]
+    subfields: ["2712", "1310"]
+  - id: rheumatology
+    name: Rheumatology
+    codes: [207RR0500X]
+    subfields: ["2745"]
+  - id: medical-genetics
+    name: Medical Genetics
+    codes: [207SG0201X]
+    subfields: ["2716", "1311"]
+
+  # --- Neurology, psychiatry ----------------------------------------------------
+  - id: neurology
+    name: Neurology
+    codes: [2084N0400X, 2084N0600X, 2084B0040X]
+    subfields: ["2728", "2808"]
+  - id: child-neurology
+    name: Child Neurology
+    codes: [2084N0402X]
+    subfields: ["2728", "2735"]
+  - id: vascular-neurology
+    name: Vascular Neurology (stroke)
+    codes: [2084V0102X]
+    subfields: ["2728"]
+  - id: epilepsy
+    name: Epilepsy
+    codes: [2084E0001X]
+    subfields: ["2728"]
+  - id: neuromuscular-medicine
+    name: Neuromuscular Medicine
+    codes: [2084N0008X]
+    subfields: ["2728"]
+  - id: psychiatry
+    name: Psychiatry
+    codes: [2084P0800X, 2084P0015X]
+    subfields: ["2738", "3203"]
+  - id: child-psychiatry
+    name: Child & Adolescent Psychiatry
+    codes: [2084P0804X]
+    subfields: ["2738", "2735"]
+  - id: geriatric-psychiatry
+    name: Geriatric Psychiatry
+    codes: [2084P0805X]
+    subfields: ["2738", "2717"]
+  - id: forensic-psychiatry
+    name: Forensic Psychiatry
+    codes: [2084F0202X]
+    subfields: ["2738"]
+    generate: false
+  - id: neurosurgery
+    name: Neurological Surgery
+    codes: [207T00000X]
+    subfields: ["2746", "2728"]
+
+  # --- Women's health -------------------------------------------------------------
+  - id: obgyn
+    name: Obstetrics & Gynecology
+    codes: [207V00000X, 207VG0400X, 207VX0000X]
+    subfields: ["2729"]
+  - id: maternal-fetal-medicine
+    name: Maternal-Fetal Medicine
+    codes: [207VM0101X]
+    subfields: ["2729", "2735"]
+  - id: gynecologic-oncology
+    name: Gynecologic Oncology
+    codes: [207VX0201X]
+    subfields: ["2729", "2730"]
+  - id: reproductive-endocrinology
+    name: Reproductive Endocrinology & Infertility
+    codes: [207VE0102X]
+    subfields: ["2743", "2729"]
+  - id: urogynecology
+    name: Urogynecology and Reconstructive Pelvic Surgery
+    codes: [207VF0040X, 2088F0040X]
+    subfields: ["2729", "2748"]
+
+  # --- Eyes, ears, head and neck ----------------------------------------------------
+  - id: ophthalmology
+    name: Ophthalmology (comprehensive)
+    codes: [207W00000X]
+    subfields: ["2731"]
+  - id: retina
+    name: Retina Specialist
+    codes: [207WX0107X]
+    subfields: ["2731"]
+  - id: glaucoma
+    name: Glaucoma Specialist
+    codes: [207WX0009X]
+    subfields: ["2731"]
+  - id: oculoplastics
+    name: Ophthalmic Plastic and Reconstructive Surgery
+    codes: [207WX0200X]
+    subfields: ["2731", "2746"]
+  - id: cornea
+    name: Cornea and External Disease
+    codes: [207WX0120X]
+    subfields: ["2731"]
+  - id: pediatric-ophthalmology
+    name: Pediatric Ophthalmology and Strabismus
+    codes: [207WX0110X]
+    subfields: ["2731", "2735"]
+  - id: neuro-ophthalmology
+    name: Neuro-ophthalmology
+    codes: [207WX0109X]
+    subfields: ["2731", "2728"]
+  - id: otolaryngology
+    name: Otolaryngology (ENT)
+    codes: [207Y00000X, 207YX0602X]
+    subfields: ["2733"]
+  - id: facial-plastic-surgery
+    name: Facial Plastic and Head & Neck Plastic Surgery
+    codes: [207YX0905X, 207YX0007X, 207YS0123X, 2082S0099X]
+    subfields: ["2733", "2746"]
+  - id: pediatric-otolaryngology
+    name: Pediatric Otolaryngology
+    codes: [207YP0228X]
+    subfields: ["2733", "2735"]
+  - id: otology-neurotology
+    name: Otology & Neurotology
+    codes: [207YX0901X]
+    subfields: ["2733", "3616"]
+  - id: oral-maxillofacial-surgery
+    name: Oral & Maxillofacial Surgery
+    codes: [204E00000X]
+    subfields: ["3504", "2746"]
+
+  # --- Musculoskeletal -------------------------------------------------------------
+  - id: orthopaedic-surgery
+    name: Orthopaedic Surgery (general)
+    codes: [207X00000X]
+    subfields: ["2732"]
+  - id: orthopaedic-sports-medicine
+    name: Orthopaedic Sports Medicine (surgical)
+    codes: [207XX0005X]
+    subfields: ["2732"]
+  - id: hand-surgery
+    name: Hand Surgery
+    codes: [207XS0106X, 2082S0105X, 2086S0105X]
+    subfields: ["2732", "2746"]
+  - id: spine-surgery
+    name: Orthopaedic Spine Surgery
+    codes: [207XS0117X]
+    subfields: ["2732", "2746"]
+  - id: joint-replacement
+    name: Adult Reconstructive Orthopaedic Surgery (joint replacement)
+    codes: [207XS0114X]
+    subfields: ["2732"]
+  - id: orthopaedic-trauma
+    name: Orthopaedic Trauma
+    codes: [207XX0801X]
+    subfields: ["2732"]
+  - id: foot-ankle-surgery
+    name: Foot and Ankle Surgery
+    codes: [207XX0004X]
+    subfields: ["2732"]
+  - id: pediatric-orthopaedics
+    name: Pediatric Orthopaedic Surgery
+    codes: [207XP3100X]
+    subfields: ["2732", "2735"]
+  - id: pmr
+    name: Physical Medicine & Rehabilitation
+    codes: [208100000X, 2081P0004X, 2081P0010X]
+    subfields: ["2742", "3612"]
+  - id: osteopathic-manipulative-medicine
+    name: Neuromusculoskeletal Medicine & Osteopathic Manipulative Medicine
+    codes: [204D00000X]
+    subfields: ["2732", "3603"]
+
+  # --- Pediatrics ------------------------------------------------------------------
+  - id: pediatrics
+    name: Pediatrics (general)
+    codes: [208000000X]
+    subfields: ["2735"]
+  - id: neonatology
+    name: Neonatal-Perinatal Medicine
+    codes: [2080N0001X]
+    subfields: ["2735"]
+  - id: pediatric-critical-care
+    name: Pediatric Critical Care
+    codes: [2080P0203X]
+    subfields: ["2706", "2735"]
+  - id: pediatric-cardiology
+    name: Pediatric Cardiology
+    codes: [2080P0202X]
+    subfields: ["2705", "2735"]
+  - id: pediatric-hematology-oncology
+    name: Pediatric Hematology-Oncology
+    codes: [2080P0207X]
+    subfields: ["2730", "2720", "2735"]
+  - id: pediatric-gastroenterology
+    name: Pediatric Gastroenterology
+    codes: [2080P0206X]
+    subfields: ["2715", "2735"]
+  - id: pediatric-endocrinology
+    name: Pediatric Endocrinology
+    codes: [2080P0205X]
+    subfields: ["2712", "2735"]
+  - id: pediatric-infectious-disease
+    name: Pediatric Infectious Diseases
+    codes: [2080P0208X]
+    subfields: ["2725", "2735"]
+  - id: pediatric-pulmonology
+    name: Pediatric Pulmonology
+    codes: [2080P0214X]
+    subfields: ["2740", "2735"]
+  - id: developmental-pediatrics
+    name: Developmental-Behavioral Pediatrics and Neurodevelopmental Disabilities
+    codes: [2080P0006X, 2080P0008X]
+    subfields: ["2735", "3204"]
+  - id: pediatric-nephrology
+    name: Pediatric Nephrology
+    codes: [2080P0210X]
+    subfields: ["2727", "2735"]
+  - id: pediatric-rheumatology
+    name: Pediatric Rheumatology
+    codes: [2080P0216X]
+    subfields: ["2745", "2735"]
+
+  # --- Surgery ---------------------------------------------------------------------
+  - id: general-surgery
+    name: General Surgery
+    codes: [208600000X]
+    subfields: ["2746"]
+  - id: colorectal-surgery
+    name: Colon & Rectal Surgery
+    codes: [208C00000X]
+    subfields: ["2746", "2715"]
+  - id: vascular-surgery
+    name: Vascular Surgery
+    codes: [2086S0129X]
+    subfields: ["2746", "2705"]
+  - id: surgical-oncology
+    name: Surgical Oncology
+    codes: [2086X0206X]
+    subfields: ["2746", "2730"]
+  - id: trauma-surgery
+    name: Trauma Surgery
+    codes: [2086S0127X]
+    subfields: ["2746", "2711"]
+  - id: pediatric-surgery
+    name: Pediatric Surgery
+    codes: [2086S0120X]
+    subfields: ["2746", "2735"]
+  - id: cardiothoracic-surgery
+    name: Thoracic and Cardiothoracic Surgery
+    codes: [208G00000X]
+    subfields: ["2746", "2705", "2740"]
+  - id: transplant-surgery
+    name: Transplant Surgery
+    codes: [204F00000X]
+    subfields: ["2747", "2746"]
+  - id: plastic-surgery
+    name: Plastic and Reconstructive Surgery
+    codes: [208200000X, 2086S0122X]
+    subfields: ["2746", "2708"]
+  - id: phlebology
+    name: Phlebology (vein disease)
+    codes: [202K00000X]
+    subfields: ["2705", "2746"]
+  - id: urology
+    name: Urology
+    codes: [208800000X]
+    subfields: ["2748"]
+  - id: pediatric-urology
+    name: Pediatric Urology
+    codes: [2088P0231X]
+    subfields: ["2748", "2735"]
+
+  # --- Radiology, nuclear medicine ----------------------------------------------
+  - id: interventional-radiology
+    name: Vascular & Interventional Radiology
+    codes: [2085R0204X]
+    subfields: ["2741", "2746"]
+  - id: radiation-oncology
+    name: Radiation Oncology
+    codes: [2085R0001X, 2085R0203X]
+    subfields: ["2730", "2741"]
+  - id: nuclear-medicine
+    name: Nuclear Medicine (imaging and radionuclide therapy)
+    codes: [207U00000X, 207UN0901X, 207UN0902X, 2085N0904X]
+    subfields: ["2741"]
+  - id: diagnostic-radiology
+    name: Diagnostic Radiology
+    codes: [2085R0202X, 2085N0700X, 2085B0100X, 2085P0229X, 2085U0001X, 2085D0003X]
+    subfields: ["2741"]
+    generate: false
+
+  # --- Pathology, preventive medicine --------------------------------------------
+  - id: pathology
+    name: Pathology
+    codes: [207ZP0102X, 207ZP0101X, 207ZP0105X, 207ZC0500X, 207ZH0000X, 207ZB0001X,
+            207ZF0201X, 207ZC0006X, 207ZN0500X, 207ZP0213X, 207ZP0007X]
+    subfields: ["2734"]
+    generate: false
+  - id: occupational-medicine
+    name: Occupational and Environmental Medicine
+    codes: [2083X0100X, 2083P0500X]
+    subfields: ["2739"]
+  - id: public-health
+    name: Public Health, Preventive and Aerospace Medicine
+    codes: [2083P0901X, 2083A0100X]
+    subfields: ["2739", "2713"]
+    generate: false

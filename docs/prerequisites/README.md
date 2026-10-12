@@ -15,7 +15,7 @@ _All endpoints, file names, and sizes in this folder were verified live on 2026-
 | [02-cms-medical-school.md](02-cms-medical-school.md) | Bucket 2 — medical school + graduation year |
 | [03-publications.md](03-publications.md) | Bucket 3 — OpenAlex + PubMed |
 | [04-clinical-trials.md](04-clinical-trials.md) | Bucket 4 — ClinicalTrials.gov |
-| [05-condition-vocabulary.md](05-condition-vocabulary.md) | Bucket 5 — MeSH + MedlinePlus + LLM enrichment |
+| [05-condition-vocabulary.md](05-condition-vocabulary.md) | Bucket 5 — retired 2026-10-11; replaced by `pex vocab` (generated concepts) |
 
 One decision is still open and it affects bucket 3's timeline and cost: [decisions/0001-openalex-works-via-snapshot.md](../decisions/0001-openalex-works-via-snapshot.md).
 
