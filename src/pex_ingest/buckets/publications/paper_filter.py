@@ -10,8 +10,10 @@ deleted — when:
   * before_career_window — published more than CAREER_LEAD_YEARS before the
     doctor graduated from medical school (decided 2026-10-11). Without a
     graduation year, the NPI issue year stands in when the NPI was issued after
-    2008 (NPIs are issued at the start of residency); otherwise there is no
-    window check.
+    2008 (NPIs are issued at the start of residency); otherwise only an absolute
+    floor applies — nothing before EARLIEST_CAREER_YEAR, since a doctor still
+    practicing who published then would be past 90 (an 1850 paper on a pediatric
+    urologist with no graduation year on file).
   * non_us_affiliation — the paper lists the author only at non-US institutions.
     International medical graduates keep foreign papers from before they came to
     the US (published no later than a year after their NPI was issued).
@@ -37,6 +39,7 @@ log = logging.getLogger("pex.publications.paper_filter")
 
 CAREER_LEAD_YEARS = 8
 NPI_YEAR_PROXY_AFTER = 2008
+EARLIEST_CAREER_YEAR = 1960
 HOLD_SHARE = 0.90
 HOLD_MIN_PAPERS = 50
 
@@ -53,6 +56,7 @@ doctor AS (
                WHEN edu.grad_year IS NOT NULL THEN edu.grad_year - %(lead)s
                WHEN extract(year FROM p.enumeration_date) > %(npi_after)s
                    THEN extract(year FROM p.enumeration_date)::int - %(lead)s
+               ELSE %(floor)s
            END AS window_start,
            extract(year FROM p.enumeration_date)::int AS npi_year,
            coalesce(edu.med_school = 'OTHER', false) AS international_grad
@@ -119,7 +123,8 @@ FROM paper_verdict
 def run(conn: psycopg.Connection) -> dict:
     with conn.cursor() as cur:
         cur.execute("SET work_mem = '512MB'")
-        cur.execute(CLASSIFY, {"lead": CAREER_LEAD_YEARS, "npi_after": NPI_YEAR_PROXY_AFTER})
+        cur.execute(CLASSIFY, {"lead": CAREER_LEAD_YEARS, "npi_after": NPI_YEAR_PROXY_AFTER,
+                          "floor": EARLIEST_CAREER_YEAR})
         cur.execute("CREATE INDEX ON paper_verdict (npi, openalex_work_id)")
         cur.execute("ANALYZE paper_verdict")
         cur.execute(SUMMARY)
