@@ -51,7 +51,8 @@ and it is deliberately not a migration system. So:
 | `0010_vocabulary_grants.sql` | `SELECT` for `pex_app` on the three new tables | Tables created after `08-roles-and-grants.sql` need explicit grants for the read-only API role. |
 | `0011_orcid_record_source.sql` | `staging.orcid_record.source` | Whether a record came from the live API or ORCID's annual Public Data File (the API caps anonymous reads at 25,000/day). |
 | `0012_concept_tier_staging.sql` | `staging.work_concept_hit`, `staging.trial_concept_hit` (unlogged) | Scratch tables for the tiered feature build's title and MeSH hits. |
-| `0013_title_search_index.sql` | Full-text indexes on `work.title` and trial titles; validates the synonym-kind CHECK | The API's live fallback for unknown concepts. **Apply after the vocabulary load and after any works re-run** (the build competes with it for disk reads). |
+| `0013_title_search_index.sql` | Full-text indexes on `work.title` and trial titles; validates the synonym-kind CHECK | Built for the API's live fallback for unknown concepts, which was removed on 2026-10-15 (the API now answers "not covered" instead); nothing in the API reads these indexes any more. **Apply after the vocabulary load and after any works re-run** (the build competes with it for disk reads). |
+| `0014_missed_search.sql` | Schema `app`; `app.missed_search`; `INSERT` (and `UPDATE` on three columns) for `pex_app` | A log of real medical topics searched that the vocabulary lacks, one row per query with a count and no identity, for review and addition. The API's only write, so it gets its own schema and a narrow grant. **Reconciled into the docs-repo DDL** (`00`, `02` and `08`). |
 
 ## How this resolves the `work_mesh` open question
 
